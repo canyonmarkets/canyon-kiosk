@@ -4,8 +4,8 @@ import { useKioskStore } from '../../lib/store'
 
 const PAYMENT_TIMEOUT_SEC = 90
 const POLL_INTERVAL_MS = 2500
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!
-const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+const SUPABASE_URL = 'https://zgmxmficzvlpzkosdcnx.supabase.co'
+const SUPABASE_ANON_KEY = 'sb_publishable_MUAaPltQkyDFsR0NvLTikQ_gY_pfJFy'
 
 type PayStatus = 'idle' | 'sending' | 'waiting' | 'approved' | 'declined' | 'timeout' | 'error'
 
