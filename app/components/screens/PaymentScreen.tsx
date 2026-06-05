@@ -45,6 +45,7 @@ export default function PaymentScreen({ onApproved, isActive }: { onApproved: ()
     refIdRef.current = referenceId
     setPayStatus('sending')
     setErrorMsg(null)
+    console.log('[payment] startPayment called', { amountCents, referenceId, SUPABASE_URL, total })
 
     try {
       const res = await fetch(`${SUPABASE_URL}/functions/v1/charge`, {
@@ -98,6 +99,7 @@ export default function PaymentScreen({ onApproved, isActive }: { onApproved: ()
   }
 
   useEffect(() => {
+    console.log('[payment] isActive changed:', isActive)
     if (!isActive) {
       stopPolling()
       setPayStatus('idle')
