@@ -1,0 +1,186 @@
+@font-face {
+  font-family: 'Nokia';
+  src: url('/NokianvirallinenkirjasinREGULAR.ttf') format('truetype');
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --ember:        #C94B0C;
+  --ember-hover:  #a83d09;
+  --ember-dim:    rgba(201,75,12,0.15);
+  --bg:           #1a1a1a;
+  --surface:      #262626;
+  --surface-2:    #2e2e2e;
+  --border:       #3d3d3d;
+  --text:         #f8fafc;
+  --text-muted:   #9ca3af;
+  --text-dim:     #5a5a5a;
+  --green:        #16a34a;
+  --green-dim:    rgba(22,163,74,0.12);
+  --red:          #dc2626;
+  --font-brand:   'Nokia', sans-serif;
+}
+
+html, body {
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+/* Scrollable areas */
+.scrollable {
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.scrollable::-webkit-scrollbar { width: 4px; }
+.scrollable::-webkit-scrollbar-track { background: transparent; }
+.scrollable::-webkit-scrollbar-thumb { background: #334155; border-radius: 2px; }
+
+/* Kiosk root */
+#kiosk-root {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Screen transitions */
+.kiosk-screen {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.18s ease;
+}
+.kiosk-screen.active {
+  opacity: 1;
+  pointer-events: all;
+}
+
+/* Shared header bar */
+.kiosk-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 28px;
+  background: var(--surface);
+  border-bottom: 3px solid var(--ember);
+  flex-shrink: 0;
+  height: 80px;
+  gap: 16px;
+}
+.header-logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.header-logo-name {
+  font-family: var(--font-brand);
+  font-size: 24px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text);
+  white-space: nowrap;
+}
+.header-title {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text);
+}
+.scanner-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--green);
+  white-space: nowrap;
+}
+.scanner-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--green);
+  flex-shrink: 0;
+  animation: pulse-green 2s ease-in-out infinite;
+}
+@keyframes pulse-green {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(22,163,74,0.5); }
+  50%       { opacity: 0.8; box-shadow: 0 0 0 8px rgba(22,163,74,0); }
+}
+
+/* Buttons */
+.btn-back {
+  background: transparent;
+  border: 2px solid var(--border);
+  color: var(--text-muted);
+  padding: 10px 22px;
+  border-radius: 10px;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+.btn-back:active { border-color: var(--ember); color: var(--ember); }
+
+.btn-primary {
+  background: var(--ember);
+  border: none;
+  color: white;
+  font-family: var(--font-brand);
+  font-size: 19px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.1s;
+}
+.btn-primary:active { background: var(--ember-hover); transform: scale(0.98); }
+.btn-primary:disabled { background: var(--text-dim); cursor: not-allowed; transform: none; }
+
+.btn-outline {
+  background: transparent;
+  border: 2px solid var(--ember);
+  color: var(--ember);
+  font-family: var(--font-brand);
+  font-size: 17px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.btn-outline:active { background: var(--ember-dim); }
+
+/* Tap pulse animation for payment ring */
+@keyframes tap-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(201,75,12,0.4); transform: scale(1); }
+  50%       { box-shadow: 0 0 0 32px rgba(201,75,12,0); transform: scale(1.04); }
+}
+
+/* Check pop animation */
+@keyframes check-pop {
+  0%   { transform: scale(0) rotate(-15deg); }
+  70%  { transform: scale(1.12) rotate(3deg); }
+  100% { transform: scale(1) rotate(0deg); }
+}
+
+/* Fade-in-up */
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateX(-50%) translateY(12px); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+}

@@ -1,0 +1,15 @@
+[build]
+  command = "npm run build"
+  publish = "out"
+
+# Never cache index.html so the Z30 always gets the latest JS bundle references
+[[headers]]
+  for = "/index.html"
+  [headers.values]
+    Cache-Control = "no-cache, no-store, must-revalidate"
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "SAMEORIGIN"
+    X-Content-Type-Options = "nosniff"
