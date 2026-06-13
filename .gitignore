@@ -12,3 +12,6 @@ next-env.d.ts
 
 # Local Netlify folder
 .netlify
+
+# Supabase CLI cache
+supabase/.temp/

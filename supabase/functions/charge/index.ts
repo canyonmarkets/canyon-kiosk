@@ -1,84 +1,85 @@
 import { createClient } from 'npm:@supabase/supabase-js@2'
+import { importPKCS8, SignJWT } from 'npm:jose@5'
 
 const POYNT_API = 'https://services.poynt.net'
-const APP_ID = Deno.env.get('POYNT_APP_ID')!
-const PRIVATE_KEY_PEM = Deno.env.get('POYNT_PRIVATE_KEY')!
-const BUSINESS_ID = Deno.env.get('POYNT_BUSINESS_ID')!
-const STORE_ID = Deno.env.get('POYNT_STORE_ID')!
-const DEVICE_ID = Deno.env.get('POYNT_DEVICE_ID')!
+const APP_ID = Deno.env.get('POYNT_APP_ID') || 'urn:aid:f4f01b8d-9abb-4677-88d0-71c3302a3b53'
+const BUSINESS_ID = Deno.env.get('POYNT_BUSINESS_ID') || '84068c23-6ed2-4114-9a87-07cd3dd58ce7'
+const STORE_ID = Deno.env.get('POYNT_STORE_ID') || '69d9d6e7-5813-431f-bc4c-058d210faf01'
+const DEVICE_ID = Deno.env.get('POYNT_DEVICE_ID') || '6e07c9af-e666-4019-9ebd-16645c4338c0'
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!
 const SUPABASE_SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 const WEBHOOK_URL = `${SUPABASE_URL}/functions/v1/charge-webhook`
+
+const PRIVATE_KEY_PEM = Deno.env.get('POYNT_PRIVATE_KEY')!
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-// Convert PKCS#1 RSA private key PEM to PKCS#8 DER for Web Crypto API
-function pkcs1ToPkcs8(pkcs1: Uint8Array): Uint8Array {
-  function encLen(n: number): Uint8Array {
-    if (n < 128) return new Uint8Array([n])
-    const b: number[] = []
-    let x = n
-    while (x > 0) { b.unshift(x & 0xff); x >>= 8 }
-    return new Uint8Array([0x80 | b.length, ...b])
-  }
-  function wrap(tag: number, content: Uint8Array): Uint8Array {
-    return new Uint8Array([tag, ...encLen(content.length), ...content])
-  }
-  const version = new Uint8Array([0x02, 0x01, 0x00])
-  // OID 1.2.840.113549.1.1.1 (rsaEncryption) + NULL
-  const oid = new Uint8Array([0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01, 0x05, 0x00])
-  const algId = wrap(0x30, oid)
-  const privateKey = wrap(0x04, pkcs1)
-  return wrap(0x30, new Uint8Array([...version, ...algId, ...privateKey]))
-}
-
-async function importPrivateKey(): Promise<CryptoKey> {
-  const pem = PRIVATE_KEY_PEM
-    .replace(/-----BEGIN RSA PRIVATE KEY-----/, '')
-    .replace(/-----END RSA PRIVATE KEY-----/, '')
-    .replace(/\s+/g, '')
-  const pkcs1Der = Uint8Array.from(atob(pem), c => c.charCodeAt(0))
-  const pkcs8Der = pkcs1ToPkcs8(pkcs1Der)
-  return crypto.subtle.importKey(
-    'pkcs8',
-    pkcs8Der.buffer,
-    { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
-    false,
-    ['sign']
-  )
-}
-
-function b64url(bytes: ArrayBuffer | Uint8Array): string {
-  return btoa(String.fromCharCode(...new Uint8Array(bytes instanceof ArrayBuffer ? bytes : bytes.buffer)))
-    .replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_')
-}
-
-async function getPoyntAccessToken(key: CryptoKey): Promise<string> {
+async function makeAppJWT(): Promise<string> {
+  const privateKey = await importPKCS8(PRIVATE_KEY_PEM, 'RS256')
   const now = Math.floor(Date.now() / 1000)
-  const header = b64url(new TextEncoder().encode(JSON.stringify({ alg: 'RS256', typ: 'JWT' })))
-  const payload = b64url(new TextEncoder().encode(JSON.stringify({
-    iss: APP_ID,
-    sub: APP_ID,
-    aud: POYNT_API,
-    iat: now,
-    exp: now + 300,
-    jti: crypto.randomUUID(),
-  })))
-  const signingInput = `${header}.${payload}`
-  const sig = await crypto.subtle.sign(
-    'RSASSA-PKCS1-v1_5',
-    key,
-    new TextEncoder().encode(signingInput)
-  )
-  const jwt = `${signingInput}.${b64url(sig)}`
+  return new SignJWT({})
+    .setProtectedHeader({ alg: 'RS256' })
+    .setIssuer(APP_ID)
+    .setSubject(APP_ID)
+    .setAudience(POYNT_API)
+    .setIssuedAt(now)
+    .setExpirationTime(now + 300)
+    .setJti(crypto.randomUUID())
+    .sign(privateKey)
+}
 
+function decodeJwtPayload(jwt: string): Record<string, unknown> | null {
+  try {
+    return JSON.parse(atob(jwt.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')))
+  } catch {
+    return null
+  }
+}
+
+async function getPoyntAccessToken(supabase: ReturnType<typeof createClient>): Promise<string> {
+  const appJWT = await makeAppJWT()
+
+  // Merchant token stored by oauth-callback (production Canyon Markets grant)
+  const { data: row } = await supabase.from('poynt_tokens').select('*').eq('id', 1).maybeSingle()
+
+  if (row?.access_token) {
+    const claims = decodeJwtPayload(row.access_token)
+    const exp = typeof claims?.exp === 'number' ? claims.exp : 0
+    if (exp > Date.now() / 1000 + 60) return row.access_token
+
+    if (row.refresh_token) {
+      const res = await fetch(`${POYNT_API}/token`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'Authorization': `Bearer ${appJWT}`,
+          'api-version': '1.2',
+        },
+        body: `grant_type=refresh_token&client_id=${encodeURIComponent(APP_ID)}&refresh_token=${encodeURIComponent(row.refresh_token)}`,
+      })
+      const data = await res.json()
+      if (res.ok && data.accessToken) {
+        await supabase.from('poynt_tokens').upsert({
+          id: 1,
+          business_id: row.business_id,
+          access_token: data.accessToken,
+          refresh_token: data.refreshToken ?? row.refresh_token,
+          updated_at: new Date().toISOString(),
+        })
+        return data.accessToken
+      }
+      console.error('Token refresh failed:', JSON.stringify(data))
+    }
+  }
+
+  // Fallback: app-level JWT bearer token scoped to business
   const res = await fetch(`${POYNT_API}/token`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'api-version': '1.2' },
-    body: `grantType=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${encodeURIComponent(jwt)}`,
+    body: `grantType=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${encodeURIComponent(appJWT)}&businessId=${encodeURIComponent(BUSINESS_ID)}`,
   })
   const data = await res.json()
   if (!res.ok) throw new Error(`Poynt auth failed: ${JSON.stringify(data)}`)
@@ -96,11 +97,9 @@ Deno.serve(async (req) => {
       })
     }
 
-    // Auth with Poynt
-    const privateKey = await importPrivateKey()
-    const accessToken = await getPoyntAccessToken(privateKey)
+    const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+    const accessToken = await getPoyntAccessToken(supabase)
 
-    // Send payment request to terminal via Cloud Messages
     const paymentData = JSON.stringify({
       action: 'sale',
       purchaseAmount: amountCents,
@@ -111,7 +110,7 @@ Deno.serve(async (req) => {
     })
 
     const cloudMessageRes = await fetch(
-      `${POYNT_API}/businesses/${BUSINESS_ID}/cloudMessages`,
+      `${POYNT_API}/cloudMessages`,
       {
         method: 'POST',
         headers: {
@@ -134,8 +133,6 @@ Deno.serve(async (req) => {
       throw new Error(`Poynt cloudMessages failed: ${err}`)
     }
 
-    // Record pending payment in DB
-    const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY)
     await supabase.from('payment_results').insert({
       reference_id: referenceId,
       status: 'PENDING',
