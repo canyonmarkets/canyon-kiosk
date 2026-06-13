@@ -4,6 +4,11 @@
 **Purpose:** Hand-off for whoever continues the kiosk↔dashboard wiring once GoDaddy
 provides the final Poynt info. Read this before touching the payment/sync flow.
 
+> 📍 **The master cross-app plan is `../ROADMAP.md`** (root of the combined
+> Canyon Kiosk-Dash Project folder) — start there for the full roadmap and phases.
+> This file is the kiosk-side deep dive. Note: both repos now live side-by-side
+> under that combined folder.
+
 The companion app is **vending-dash** at
 `C:\Users\jeffm\Documents\CLAUDE\VENDING\vending-dash` (live: canyonvms.netlify.app,
 repo: github.com/canyonmarkets/vending-dash). All the vending-dash changes below
@@ -240,3 +245,14 @@ Found while auditing the kiosk for go-live. All build-verified and pushed.
 - **Demo fallback catalog has duplicate UPCs** (`products.ts`: Coke and Dasani share
   `049000028904`). Only affects the offline demo fallback; the live catalog comes from
   Supabase. Harmless but worth cleaning if the fallback is ever relied on.
+
+### Later 2026-06-13 — Poynt auth sweep-up + admin price/sold-out
+- **Poynt auth (`c1e83e3`):** committed the in-progress auth work — `charge` now
+  signs the app JWT with the `jose` library and uses the stored merchant token
+  (`poynt_tokens`) with refresh; `oauth-callback` completes the grant; `list-devices`
+  is a diagnostic. **The hardcoded RSA private key was stripped from all three
+  functions** — set `POYNT_PRIVATE_KEY` as a Supabase secret and ROTATE the old key.
+- **Admin price/sold-out (`0859cf8`):** price is read-only (managed in the dashboard);
+  Sold Out persists per-machine to `app_config['machineHidden']`; `loadMachineProducts`
+  hides a product when manually sold-out OR (par set && on-hand ≤ 0). The dashboard
+  surfaces/clears the same Sold Out state in Store Inventory (`vending-dash 8e83b0a`).
