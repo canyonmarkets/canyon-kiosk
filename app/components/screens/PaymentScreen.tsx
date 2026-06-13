@@ -9,8 +9,8 @@ const SUPABASE_ANON_KEY = 'sb_publishable_MUAaPltQkyDFsR0NvLTikQ_gY_pfJFy'
 
 type PayStatus = 'idle' | 'sending' | 'waiting' | 'approved' | 'declined' | 'timeout' | 'error'
 
-export default function PaymentScreen({ onApproved, isActive }: { onApproved: () => void; isActive: boolean }) {
-  const { setScreen, cartTotal, cart, config, addTransaction, clearCart } = useKioskStore()
+export default function PaymentScreen({ onApproved, isActive }: { onApproved: (total: number) => void; isActive: boolean }) {
+  const { setScreen, cartTotal, cartSubtotal, cartTax, cart, config, addTransaction, clearCart } = useKioskStore()
   const timerRef   = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pollRef    = useRef<ReturnType<typeof setInterval> | null>(null)
   const refIdRef   = useRef<string | null>(null)
@@ -25,18 +25,25 @@ export default function PaymentScreen({ onApproved, isActive }: { onApproved: ()
 
   const handleApproved = () => {
     stopPolling()
+    // Capture totals BEFORE clearing the cart — both the saved transaction and
+    // the thank-you screen need them, and clearCart() would zero them out.
+    // (Use the store's own subtotal/tax rather than reverse-deriving from the
+    // total, so the numbers are exact for the receipt / future kiosk_sales.)
+    const finalSubtotal = cartSubtotal()
+    const finalTax      = cartTax()
+    const finalTotal    = cartTotal()
     const tx = {
       id: refIdRef.current ?? `tx_${Date.now()}`,
       items: [...cart],
-      subtotal: total / (1 + config.taxRate),
-      tax: total - total / (1 + config.taxRate),
-      total,
+      subtotal: finalSubtotal,
+      tax: finalTax,
+      total: finalTotal,
       completedAt: new Date().toISOString(),
       machineId: config.machineId,
     }
     addTransaction(tx)
     clearCart()
-    onApproved()
+    onApproved(finalTotal)
   }
 
   const startPayment = async () => {

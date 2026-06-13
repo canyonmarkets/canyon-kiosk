@@ -36,10 +36,17 @@ export default function KioskPage() {
 
   const resetIdleTimer = useCallback(() => {
     if (idleTimerRef.current) clearTimeout(idleTimerRef.current)
-    if (screen === 'cart' && cart.length > 0) {
-      idleTimerRef.current = setTimeout(() => setShowTimeout(true), CART_IDLE_SECONDS * 1000)
-    }
-  }, [screen, cart.length])
+    // Arm on ANY shopping screen — an abandoned session (even one left on the
+    // products screen with items in the cart) must never carry to the next
+    // customer. If the cart has items we confirm before discarding; an empty
+    // browsing session just resets to the attract screen.
+    const shopping = screen === 'cart' || screen === 'browse' || screen === 'products'
+    if (!shopping) return
+    idleTimerRef.current = setTimeout(() => {
+      if (useKioskStore.getState().cart.length > 0) setShowTimeout(true)
+      else setScreen('idle')
+    }, CART_IDLE_SECONDS * 1000)
+  }, [screen, setScreen])
 
   useEffect(() => { resetIdleTimer() }, [screen, cart.length, resetIdleTimer])
 
@@ -48,8 +55,8 @@ export default function KioskPage() {
 
   // Last transaction total for thank-you screen
   const [lastTotal, setLastTotal] = useState(0)
-  const handlePaymentApproved = () => {
-    setLastTotal(useKioskStore.getState().cartTotal())
+  const handlePaymentApproved = (total: number) => {
+    setLastTotal(total)
     setScreen('thankyou')
   }
 
@@ -230,7 +237,7 @@ export default function KioskPage() {
   return (
     <div
       style={{ position: 'relative', width: '100%', height: '100%' }}
-      onPointerDown={() => { if (screen === 'cart') resetIdleTimer() }}
+      onPointerDown={resetIdleTimer}
     >
       <OfflineBanner />
 
@@ -267,7 +274,7 @@ export default function KioskPage() {
 
       {/* Idle timeout modal */}
       <TimeoutModal
-        visible={showTimeout && screen === 'cart'}
+        visible={showTimeout && (screen === 'cart' || screen === 'browse' || screen === 'products')}
         onKeep={handleKeepShopping}
         onCancel={handleCancelOrder}
       />
