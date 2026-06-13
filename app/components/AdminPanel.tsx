@@ -1,17 +1,50 @@
 'use client'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useKioskStore } from '../lib/store'
 import { supabase } from '../lib/supabase'
 import { loadMarketProducts } from '../lib/loadMachineProducts'
-import { X, Save, RefreshCw, DollarSign, Settings } from 'lucide-react'
+import { X, Save, RefreshCw, Settings } from 'lucide-react'
 import type { MachineConfig } from '../types'
 
 const MACHINE_IDS = ['SF1', 'SF2', 'CC1', 'CC2', 'MB', 'EARN', 'COMBS', 'ND', 'CAP']
 
 export default function AdminPanel({ onClose }: { onClose: () => void }) {
-  const { config, updateConfig, products, setProducts, updateProductPrice, toggleProductAvailable, transactions } = useKioskStore()
+  const { config, updateConfig, products, setProducts, toggleProductAvailable, transactions } = useKioskStore()
   const [tab, setTab] = useState<'sales' | 'products' | 'settings'>('sales')
   const [draft, setDraft] = useState<MachineConfig>({ ...config })
+
+  // Resolve this kiosk's machine DB id once, so sold-out writes target the
+  // same per-machine key (machineHidden[dbId]) the loader reads.
+  const [machineDbId, setMachineDbId] = useState<string>(config.machineId)
+  const [savingSoldOut, setSavingSoldOut] = useState<string | null>(null)
+  useEffect(() => {
+    let active = true
+    supabase.from('machines').select('id').eq('code', config.machineId).single()
+      .then(({ data }) => { if (active) setMachineDbId(data?.id ?? config.machineId) })
+    return () => { active = false }
+  }, [config.machineId])
+
+  // Toggle a product Sold Out for THIS machine and persist it to Supabase so it
+  // survives the 5-minute product refresh (the old local-only toggle reverted).
+  const toggleSoldOut = async (productId: string, currentlyAvailable: boolean) => {
+    setSavingSoldOut(productId)
+    toggleProductAvailable(productId)  // optimistic local update
+    try {
+      const { data: row } = await supabase
+        .from('app_config').select('value').eq('key', 'machineHidden').maybeSingle()
+      const all = (row?.value ?? {}) as Record<string, string[]>
+      const current = all[machineDbId] ?? []
+      const next = currentlyAvailable
+        ? [...new Set([...current, productId])]        // now hidden / sold out
+        : current.filter((id) => id !== productId)     // back in stock
+      await supabase.from('app_config').upsert({ key: 'machineHidden', value: { ...all, [machineDbId]: next } })
+    } catch (e) {
+      console.warn('[admin] sold-out save failed', e)
+      toggleProductAvailable(productId)  // roll back the optimistic flip
+    } finally {
+      setSavingSoldOut(null)
+    }
+  }
 
   // Diagnostics
   const [diagRunning, setDiagRunning] = useState(false)
@@ -238,7 +271,9 @@ export default function AdminPanel({ onClose }: { onClose: () => void }) {
         {tab === 'products' && (
           <div>
             <p style={{ color: 'var(--text-muted)', fontSize: 13, marginBottom: 16 }}>
-              Edit prices or mark items as sold out. Changes take effect immediately.
+              Mark items <strong>Sold Out</strong> to hide them on this machine — it saves to the
+              cloud and sticks across refreshes. Prices are set in the Canyon dashboard and shown
+              here for reference.
             </p>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
               <thead>
@@ -254,32 +289,24 @@ export default function AdminPanel({ onClose }: { onClose: () => void }) {
                     <td style={{ padding: '10px 12px', color: 'var(--text)', fontWeight: 500 }}>{p.name}</td>
                     <td style={{ padding: '10px 12px', color: 'var(--text-muted)', textTransform: 'capitalize' }}>{p.category}</td>
                     <td style={{ padding: '10px 12px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                        <span style={{ color: 'var(--text-muted)' }}>$</span>
-                        <input
-                          type="number"
-                          step="0.25"
-                          min="0"
-                          value={p.price.toFixed(2)}
-                          onChange={(e) => updateProductPrice(p.id, parseFloat(e.target.value) || 0)}
-                          style={{
-                            width: 70, background: 'var(--surface-2)', border: '1px solid var(--border)',
-                            borderRadius: 6, padding: '5px 8px', color: 'white', fontSize: 14, textAlign: 'right',
-                          }}
-                        />
-                      </div>
+                      {/* Read-only — prices are managed in the Canyon dashboard */}
+                      <span style={{ color: 'var(--text-muted)', fontVariantNumeric: 'tabular-nums' }}>
+                        ${p.price.toFixed(2)}
+                      </span>
                     </td>
                     <td style={{ padding: '10px 12px' }}>
                       <button
-                        onClick={() => toggleProductAvailable(p.id)}
+                        onClick={() => toggleSoldOut(p.id, p.available)}
+                        disabled={savingSoldOut === p.id}
                         style={{
                           padding: '5px 14px', borderRadius: 6, fontSize: 12, fontWeight: 700,
-                          border: 'none', cursor: 'pointer',
+                          border: 'none', cursor: savingSoldOut === p.id ? 'wait' : 'pointer',
+                          opacity: savingSoldOut === p.id ? 0.6 : 1,
                           background: p.available ? 'var(--green-dim)' : 'rgba(220,38,38,0.15)',
                           color: p.available ? 'var(--green)' : 'var(--red)',
                         }}
                       >
-                        {p.available ? '✓ Available' : '✕ Sold Out'}
+                        {savingSoldOut === p.id ? 'Saving…' : p.available ? '✓ Available' : '✕ Sold Out'}
                       </button>
                     </td>
                   </tr>

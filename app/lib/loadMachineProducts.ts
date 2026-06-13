@@ -31,23 +31,27 @@ export async function loadMarketProducts(machineCode: string): Promise<Product[]
     // Use the DB id if found; fall back to the code itself (handles edge cases)
     const machineDbId = machineRow?.id ?? machineCode
 
-    // ── Step 2: read per-machine product assignments ──────────────────────
+    // ── Step 2: read per-machine config (assignments, sold-out, inventory) ─
     let productIds: string[] | null = null
+    let hiddenIds: string[] = []                          // manually marked sold-out
+    let onHand: Record<string, number> = {}              // live machine on-hand
+    let par: Record<string, number> = {}                 // machine par levels
 
-    const { data: configRow } = await supabase
+    const { data: configRows } = await supabase
       .from('app_config')
-      .select('value')
-      .eq('key', 'machineProductIds')
-      .single()
+      .select('key, value')
+      .in('key', ['machineProductIds', 'machineHidden', 'machineProductOnHand', 'machineProductPar'])
 
-    if (configRow?.value) {
-      const allAssignments = configRow.value as Record<string, string[]>
-      // Try DB id first, then code as fallback
-      const ids = allAssignments[machineDbId] ?? allAssignments[machineCode]
-      if (Array.isArray(ids) && ids.length > 0) {
-        productIds = ids
-      }
-    }
+    const cfg = (k: string) => configRows?.find((r: { key: string; value: unknown }) => r.key === k)?.value
+    const pick = <T,>(m: Record<string, T> | undefined): T | undefined => m?.[machineDbId] ?? m?.[machineCode]
+
+    const assignments = cfg('machineProductIds') as Record<string, string[]> | undefined
+    const ids = pick(assignments)
+    if (Array.isArray(ids) && ids.length > 0) productIds = ids
+
+    hiddenIds = pick(cfg('machineHidden') as Record<string, string[]> | undefined) ?? []
+    onHand    = pick(cfg('machineProductOnHand') as Record<string, Record<string, number>> | undefined) ?? {}
+    par       = pick(cfg('machineProductPar') as Record<string, Record<string, number>> | undefined) ?? {}
 
     // ── Step 3: load products, filtered by assignment if available ────────
     let query = supabase
@@ -69,14 +73,26 @@ export async function loadMarketProducts(machineCode: string): Promise<Product[]
       return []
     }
 
-    return data.map((p: any): Product => ({
-      id:        p.id,
-      name:      p.name,
-      upc:       (p.upc ?? '').trim(),
-      price:     parseFloat(p.sellPrice) || 0,
-      category:  (typeToCategory[p.type] ?? 'snacks') as Category,
-      available: true,
-    }))
+    const hiddenSet = new Set(hiddenIds)
+
+    return data.map((p: any): Product => {
+      // A product is unavailable (hidden from customers) when an operator marked
+      // it Sold Out, OR when inventory tracking says the machine is empty.
+      // When there's no par/on-hand data (inventory not yet flowing) it stays
+      // available — we never hide something just because it's untracked.
+      const manuallyHidden = hiddenSet.has(p.id)
+      const p_par = par[p.id] ?? 0
+      const p_onHand = onHand[p.id]
+      const emptyByInventory = p_par > 0 && p_onHand !== undefined && p_onHand <= 0
+      return {
+        id:        p.id,
+        name:      p.name,
+        upc:       (p.upc ?? '').trim(),
+        price:     parseFloat(p.sellPrice) || 0,
+        category:  (typeToCategory[p.type] ?? 'snacks') as Category,
+        available: !manuallyHidden && !emptyByInventory,
+      }
+    })
   } catch (err) {
     console.warn('[kiosk] Supabase connection error', err)
     return []
