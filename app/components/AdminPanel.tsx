@@ -3,8 +3,23 @@ import { useState, useEffect } from 'react'
 import { useKioskStore } from '../lib/store'
 import { supabase } from '../lib/supabase'
 import { loadMarketProducts } from '../lib/loadMachineProducts'
-import { X, Save, RefreshCw, Settings } from 'lucide-react'
+import { X, Save, RefreshCw } from 'lucide-react'
 import type { MachineConfig } from '../types'
+
+const SET_CONFIG_URL = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/set-machine-config`
+const ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+
+async function setMachineConfig(key: 'machineHidden' | 'machineProductIds', machineId: string, value: unknown): Promise<void> {
+  const res = await fetch(SET_CONFIG_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'apikey': ANON_KEY, 'Authorization': `Bearer ${ANON_KEY}` },
+    body: JSON.stringify({ key, machineId, value }),
+  })
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}))
+    throw new Error(body.error ?? `HTTP ${res.status}`)
+  }
+}
 
 const MACHINE_IDS = ['SF1', 'SF2', 'CC1', 'CC2', 'MB', 'EARN', 'COMBS', 'ND', 'CAP']
 
@@ -37,7 +52,7 @@ export default function AdminPanel({ onClose }: { onClose: () => void }) {
       const next = currentlyAvailable
         ? [...new Set([...current, productId])]        // now hidden / sold out
         : current.filter((id) => id !== productId)     // back in stock
-      await supabase.from('app_config').upsert({ key: 'machineHidden', value: { ...all, [machineDbId]: next } })
+      await setMachineConfig('machineHidden', machineDbId, next)
     } catch (e) {
       console.warn('[admin] sold-out save failed', e)
       toggleProductAvailable(productId)  // roll back the optimistic flip
@@ -151,18 +166,12 @@ export default function AdminPanel({ onClose }: { onClose: () => void }) {
         return
       }
 
-      const updated = { ...all, [dbId]: [...current, productId] }
-      const { error } = await supabase
-        .from('app_config').upsert({ key: 'machineProductIds', value: updated })
-
-      if (error) {
-        setDiagResult(prev => [...(prev ?? []), `❌ Save failed: ${error.message}`])
-      } else {
-        setFixableProducts(prev => prev.filter(p => p.id !== productId))
-        const freshProducts = await loadMarketProducts(machineCode)
-        if (freshProducts.length > 0) setProducts(freshProducts)
-        setDiagResult(prev => [...(prev ?? []), `✅ "${productName}" added to ${machineCode}! Kiosk updated.`])
-      }
+      const updated = [...current, productId]
+      await setMachineConfig('machineProductIds', dbId, updated)
+      setFixableProducts(prev => prev.filter(p => p.id !== productId))
+      const freshProducts = await loadMarketProducts(machineCode)
+      if (freshProducts.length > 0) setProducts(freshProducts)
+      setDiagResult(prev => [...(prev ?? []), `✅ "${productName}" added to ${machineCode}! Kiosk updated.`])
     } catch (e: any) {
       setDiagResult(prev => [...(prev ?? []), `❌ Error: ${e?.message ?? String(e)}`])
     } finally {
