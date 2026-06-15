@@ -52,6 +52,13 @@ export default function PaymentScreen({ onApproved, isActive }: { onApproved: (t
     refIdRef.current = referenceId
     setPayStatus('sending')
     setErrorMsg(null)
+    // Send the cart so the `charge` fn can persist a kiosk_sales row at charge time
+    // (the bridge into vending-dash). subtotal is PRE-TAX — the revenue figure.
+    const items = cart.map((i) => ({
+      productId: i.product.id, name: i.product.name, qty: i.qty, unitPrice: i.product.price,
+    }))
+    const subtotal = cartSubtotal()
+    const tax = cartTax()
     console.log('[payment] startPayment called', { amountCents, referenceId, SUPABASE_URL, total })
 
     try {
@@ -61,7 +68,7 @@ export default function PaymentScreen({ onApproved, isActive }: { onApproved: (t
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
         },
-        body: JSON.stringify({ amountCents, referenceId, machineId: config.machineId }),
+        body: JSON.stringify({ amountCents, referenceId, machineId: config.machineId, items, subtotal, tax }),
       })
 
       if (!res.ok) {

@@ -90,7 +90,7 @@ Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
 
   try {
-    const { amountCents, referenceId, machineId } = await req.json()
+    const { amountCents, referenceId, machineId, items, subtotal, tax } = await req.json()
     if (!amountCents || !referenceId) {
       return new Response(JSON.stringify({ error: 'amountCents and referenceId required' }), {
         status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
@@ -139,6 +139,24 @@ Deno.serve(async (req) => {
       amount_cents: amountCents,
       machine_id: machineId ?? null,
     })
+
+    // Bridge to vending-dash: persist the cart NOW (status PENDING) so the line
+    // items survive even if the kiosk client times out or navigates away. The
+    // charge-webhook flips this to PROCESSED/CANCELED; vending-dash then ingests
+    // PROCESSED rows into sale_records + inventory. Revenue is the PRE-TAX subtotal.
+    // Defensive: never let a bridge-write failure block the payment response.
+    if (Array.isArray(items) && items.length > 0) {
+      const { error: ksErr } = await supabase.from('kiosk_sales').insert({
+        id: referenceId,
+        machine_code: machineId ?? null,
+        items,
+        subtotal: subtotal ?? (amountCents / 100),
+        tax: tax ?? 0,
+        total: amountCents / 100,
+        status: 'PENDING',
+      })
+      if (ksErr) console.error('kiosk_sales insert failed (payment still proceeds):', ksErr)
+    }
 
     return new Response(JSON.stringify({ referenceId, status: 'PENDING' }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' }

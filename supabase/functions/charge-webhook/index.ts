@@ -29,6 +29,15 @@ Deno.serve(async (req) => {
 
     if (error) throw error
 
+    // Confirm the bridge row written by `charge` so vending-dash can ingest it.
+    // This is the authoritative server-side confirmation — it lands even if the
+    // kiosk client already timed out / moved on. completed_at is set on PROCESSED.
+    const { error: ksErr } = await supabase
+      .from('kiosk_sales')
+      .update({ status, completed_at: status === 'PROCESSED' ? new Date().toISOString() : null })
+      .eq('id', referenceId)
+    if (ksErr) console.error('kiosk_sales status update failed:', ksErr)
+
     // Must return 200 quickly — Poynt retries at 3s, 5s, 10s if it doesn't get 200
     return new Response('ok', { status: 200 })
 
