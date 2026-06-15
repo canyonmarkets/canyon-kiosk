@@ -8,7 +8,12 @@ const STORE_ID = Deno.env.get('POYNT_STORE_ID') || '69d9d6e7-5813-431f-bc4c-058d
 const DEVICE_ID = Deno.env.get('POYNT_DEVICE_ID') || '6e07c9af-e666-4019-9ebd-16645c4338c0'
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!
 const SUPABASE_SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
-const WEBHOOK_URL = `${SUPABASE_URL}/functions/v1/charge-webhook`
+// Shared secret so the public charge-webhook can verify a callback really came from
+// a charge we initiated (the webhook runs --no-verify-jwt). Set WEBHOOK_SECRET on
+// both functions at go-live; until then it falls back to the unauthenticated URL.
+const WEBHOOK_SECRET = Deno.env.get('WEBHOOK_SECRET') ?? ''
+const WEBHOOK_BASE = `${SUPABASE_URL}/functions/v1/charge-webhook`
+const WEBHOOK_URL = WEBHOOK_SECRET ? `${WEBHOOK_BASE}?token=${encodeURIComponent(WEBHOOK_SECRET)}` : WEBHOOK_BASE
 
 const PRIVATE_KEY_PEM = Deno.env.get('POYNT_PRIVATE_KEY')!
 

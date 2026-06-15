@@ -97,9 +97,12 @@ export default function PaymentScreen({ onApproved, isActive }: { onApproved: (t
             setPayStatus('approved')
             setTimeout(handleApproved, 800)
           } else if (status === 'CANCELED') {
+            // Return to the cart on a decline/cancel instead of silently re-sending
+            // a brand-new charge in a loop (which risked double charges and a
+            // terminal left armed). The shopper re-initiates payment deliberately.
             stopPolling()
             setPayStatus('declined')
-            setTimeout(() => { setPayStatus('waiting'); startPayment() }, 3000)
+            setTimeout(() => setScreen('cart'), 3500)
           }
         } catch {
           // network blip — keep polling
@@ -131,7 +134,7 @@ export default function PaymentScreen({ onApproved, isActive }: { onApproved: (t
       case 'sending':  return { text: 'Sending to terminal…', color: 'var(--ember)' }
       case 'waiting':  return { text: 'Tap your card or phone on the terminal', color: '#fff' }
       case 'approved': return { text: '✓ Payment approved!', color: '#4ade80' }
-      case 'declined': return { text: 'Payment cancelled — retrying…', color: '#f87171' }
+      case 'declined': return { text: 'Payment cancelled — returning to cart', color: '#f87171' }
       case 'timeout':  return { text: '⚠️ Payment timed out — returning to cart', color: '#f87171' }
       case 'error':    return { text: errorMsg ?? 'Connection error', color: '#f87171' }
       default:         return { text: '', color: '#fff' }

@@ -10,6 +10,19 @@ Deno.serve(async (req) => {
     return new Response('method not allowed', { status: 405 })
   }
 
+  // Authenticity: this endpoint runs --no-verify-jwt so Poynt can POST to it, which
+  // means anyone could otherwise POST {referenceId, status:'PROCESSED'} and flip a
+  // pending charge to approved (a free-checkout hole — referenceIds are guessable).
+  // The charge fn appends ?token=WEBHOOK_SECRET to the callbackUrl; require it to
+  // match when the secret is configured. (No secret set = legacy open behavior.)
+  const expectedSecret = Deno.env.get('WEBHOOK_SECRET') ?? ''
+  if (expectedSecret) {
+    const token = new URL(req.url).searchParams.get('token')
+    if (token !== expectedSecret) {
+      return new Response('unauthorized', { status: 401 })
+    }
+  }
+
   try {
     const body = await req.json()
     // Poynt callback shape: { referenceId, status: 'PROCESSED'|'CANCELED', transactions: [...] }

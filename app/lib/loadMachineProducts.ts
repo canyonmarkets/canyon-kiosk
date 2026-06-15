@@ -53,20 +53,21 @@ export async function loadMarketProducts(machineCode: string): Promise<Product[]
     onHand    = pick(cfg('machineProductOnHand') as Record<string, Record<string, number>> | undefined) ?? {}
     par       = pick(cfg('machineProductPar') as Record<string, Record<string, number>> | undefined) ?? {}
 
-    // ── Step 3: load products, filtered by assignment if available ────────
-    let query = supabase
+    // ── Step 3: load products, filtered by this machine's assignment ──────
+    // Safety: if no assignment is found we show NOTHING rather than the entire
+    // catalog. On a live machine, dumping all ~225 SKUs would let customers buy
+    // items that aren't physically present (unfulfillable sale). An empty
+    // storefront is the correct, loud signal that Machine Inventory needs setup.
+    if (!productIds) {
+      console.warn('[kiosk] No product assignments for', machineCode, '(db id:', machineDbId, ') — showing no products. Assign products + pars in vending-dash → Machine Inventory.')
+      return []
+    }
+
+    const { data, error } = await supabase
       .from('products')
       .select('id, name, upc, type, sellPrice')
       .eq('status', 'Active')
-
-    if (productIds) {
-      query = query.in('id', productIds)
-    } else {
-      // No assignments found — log and load all active products
-      console.info('[kiosk] No product assignments for', machineCode, '(db id:', machineDbId, ') — loading all active products')
-    }
-
-    const { data, error } = await query
+      .in('id', productIds)
 
     if (error || !data?.length) {
       console.warn('[kiosk] Failed to load products', error)
@@ -75,7 +76,10 @@ export async function loadMarketProducts(machineCode: string): Promise<Product[]
 
     const hiddenSet = new Set(hiddenIds)
 
-    return data.map((p: any): Product => {
+    return data
+      // Never surface a $0 / unpriced item — that would be a free checkout.
+      .filter((p: any) => (parseFloat(p.sellPrice) || 0) > 0)
+      .map((p: any): Product => {
       // A product is unavailable (hidden from customers) when an operator marked
       // it Sold Out, OR when inventory tracking says the machine is empty.
       // When there's no par/on-hand data (inventory not yet flowing) it stays
