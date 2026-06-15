@@ -1,21 +1,30 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { createClient } from '@supabase/supabase-js'
 
 // ─── Heartbeat endpoint ───────────────────────────────────────────────────────
-// Each kiosk POSTs here every 5 minutes.
-// In Phase 2 (Supabase) this will write to a machine_heartbeats table
-// and trigger an alert if a machine hasn't pinged in > 10 minutes.
+// Each kiosk POSTs here every 5 minutes (see app/page.tsx). We upsert the machine's
+// last_seen into machine_heartbeats; the vending-dash dashboard flags a machine
+// "offline" when last_seen is older than ~10 minutes.
 //
-// For now: logs the ping and returns 200 OK.
-// TODO: add email/SMS alert when a machine goes silent.
+// Uses the publishable (anon) key — same as the rest of the kiosk; machine_heartbeats
+// has a permissive policy since it holds no sensitive data.
+
+const SUPABASE_URL = 'https://zgmxmficzvlpzkosdcnx.supabase.co'
+const SUPABASE_ANON_KEY = 'sb_publishable_MUAaPltQkyDFsR0NvLTikQ_gY_pfJFy'
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
 
 export async function POST(req: NextRequest) {
   try {
-    const { machineId, ts } = await req.json()
-    console.log(`[heartbeat] ${machineId} — ${ts}`)
+    const { machineId } = await req.json()
+    if (!machineId) return NextResponse.json({ error: 'machineId required' }, { status: 400 })
 
-    // TODO Phase 2: upsert to Supabase + check last_seen gap
+    const now = new Date().toISOString()
+    const { error } = await supabase
+      .from('machine_heartbeats')
+      .upsert({ machine_code: machineId, last_seen: now, updated_at: now })
+    if (error) console.warn('[heartbeat] upsert failed:', error.message)
 
-    return NextResponse.json({ ok: true, machineId, receivedAt: new Date().toISOString() })
+    return NextResponse.json({ ok: true, machineId, receivedAt: now })
   } catch {
     return NextResponse.json({ error: 'bad request' }, { status: 400 })
   }
