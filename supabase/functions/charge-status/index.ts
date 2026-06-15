@@ -24,11 +24,16 @@ Deno.serve(async (req) => {
     .from('payment_results')
     .select('status, transaction_id')
     .eq('reference_id', referenceId)
-    .single()
+    .maybeSingle()
 
-  if (error || !data) {
-    return new Response(JSON.stringify({ status: 'PENDING' }), {
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+  if (error) {
+    return new Response(JSON.stringify({ status: 'ERROR', error: error.message }), {
+      status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+    })
+  }
+  if (!data) {
+    return new Response(JSON.stringify({ status: 'NOT_FOUND' }), {
+      status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
     })
   }
 
