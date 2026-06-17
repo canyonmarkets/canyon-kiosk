@@ -15,10 +15,27 @@ Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
 
   try {
-    const { amountCents, referenceId, machineId, items, subtotal, tax } = await req.json()
+    const { amountCents, referenceId, machineId, items, subtotal, tax, _testDecline } = await req.json()
     if (!amountCents || !referenceId) {
       return new Response(JSON.stringify({ error: 'amountCents and referenceId required' }), {
         status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      })
+    }
+
+    const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+
+    // Idempotency guard: if a payment row already exists for this referenceId,
+    // return its current status without creating a second PaymentIntent.
+    // Prevents double-charging if the kiosk retries a request (network fluke,
+    // same-millisecond timestamp collision, etc.).
+    const { data: existing } = await supabase
+      .from('payment_results')
+      .select('status')
+      .eq('reference_id', referenceId)
+      .maybeSingle()
+    if (existing) {
+      return new Response(JSON.stringify({ referenceId, status: existing.status }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       })
     }
 
@@ -38,7 +55,19 @@ Deno.serve(async (req) => {
       payment_intent: pi.id,
     })
 
-    const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+    // In test mode, simulate a card tap so the payment auto-completes.
+    // _testDecline=true simulates a declined card (for testing the cancel flow).
+    // In production this block is never reached (sk_live_ key).
+    if (STRIPE_SECRET_KEY.startsWith('sk_test_')) {
+      if (_testDecline) {
+        await stripe.testHelpers.terminal.readers.presentPaymentMethod(STRIPE_READER_ID, {
+          type: 'card_present',
+          card_present: { number: '4000000000000002' },
+        })
+      } else {
+        await stripe.testHelpers.terminal.readers.presentPaymentMethod(STRIPE_READER_ID)
+      }
+    }
 
     // 3. Record the pending charge — transaction_id holds the Stripe PaymentIntent ID
     await supabase.from('payment_results').insert({
