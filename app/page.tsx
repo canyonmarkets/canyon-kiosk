@@ -17,8 +17,15 @@ const CART_IDLE_SECONDS = 120  // 2 minutes — customer may be walking to kiosk
 export default function KioskPage() {
   const { screen, setScreen, clearCart, cart, config, setProducts, productsLoading } = useKioskStore()
 
+  // Prevent React hydration mismatch: the SSR pre-build uses the default machineId
+  // ('SF1') but every other machine reads a different URL param on the client.
+  // Returning null until mounted lets the client render fresh with the correct config.
+  const [mounted, setMounted] = useState(false)
+  useEffect(() => { setMounted(true) }, [])
+
   // Load real products from Supabase on init
   useEffect(() => {
+    if (!mounted) return
     loadMarketProducts(config.machineId)
       .then((products) => {
         // setProducts also clears productsLoading; call with demo fallback if Supabase returns nothing
@@ -28,7 +35,7 @@ export default function KioskPage() {
         // Network error on first boot — keep demo products, clear loading spinner
         setProducts(useKioskStore.getState().products)
       })
-  }, [])
+  }, [mounted])
 
   // Idle timer (fires when customer leaves cart without paying)
   const [showTimeout, setShowTimeout] = useState(false)
@@ -233,6 +240,8 @@ export default function KioskPage() {
     const interval = setInterval(sendHeartbeat, 5 * 60 * 1000)
     return () => clearInterval(interval)
   }, [config.machineId])
+
+  if (!mounted) return <div style={{ position: 'fixed', inset: 0, background: '#0a0a0a' }} />
 
   return (
     <div
