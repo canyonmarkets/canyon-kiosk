@@ -62,5 +62,5 @@ export const CATEGORIES: Record<string, { label: string; icon: string }> = {
 
 // Which categories to show on the browse screen (ordered)
 export const ACTIVE_CATEGORIES: string[] = [
-  'energy', 'drinks', 'chips', 'crackers', 'snacks', 'candy',
+  'energy', 'drinks', 'ice-cream', 'chips', 'crackers', 'snacks', 'candy', 'food',
 ]

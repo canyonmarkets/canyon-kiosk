@@ -4,9 +4,10 @@ import type { Product, Category } from '../types'
 // Maps vending-dash product types to kiosk categories
 const typeToCategory: Record<string, Category> = {
   'Energy Drink': 'energy',
+  'Soda':         'drinks',
   'Drink':        'drinks',
   'Other Drink':  'drinks',
-  'Ice Cream':    'food',
+  'Ice Cream':    'ice-cream',
   'Food':         'food',
   'Snacks':       'snacks',
   'Chips':        'chips',
