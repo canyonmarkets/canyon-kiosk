@@ -35,16 +35,18 @@ export async function loadMarketProducts(machineCode: string): Promise<Product[]
     const machineDbId = machineRow?.id ?? machineCode
     console.log('[kiosk] machine lookup:', machineCode, '→', machineDbId)
 
-    // ── Step 2: read per-machine config (assignments, sold-out, inventory) ─
+    // ── Step 2: read per-machine config (assignments + operator Sold-Out list) ─
     let productIds: string[] | null = null
     let hiddenIds: string[] = []                          // manually marked sold-out
-    let onHand: Record<string, number> = {}              // live machine on-hand
-    let par: Record<string, number> = {}                 // machine par levels
 
+    // We only need assignments + the Sold-Out list. machineProductOnHand /
+    // machineProductPar are intentionally NOT fetched anymore: the kiosk no
+    // longer auto-hides on stock count (see availability note below), and
+    // skipping those two large configs (~40KB combined) trims the load payload.
     const { data: configRows } = await supabase
       .from('app_config')
       .select('key, value')
-      .in('key', ['machineProductIds', 'machineHidden', 'machineProductOnHand', 'machineProductPar'])
+      .in('key', ['machineProductIds', 'machineHidden'])
 
     const cfg = (k: string) => configRows?.find((r: { key: string; value: unknown }) => r.key === k)?.value
     const pick = <T,>(m: Record<string, T> | undefined): T | undefined => m?.[machineDbId] ?? m?.[machineCode]
@@ -54,8 +56,6 @@ export async function loadMarketProducts(machineCode: string): Promise<Product[]
     if (Array.isArray(ids) && ids.length > 0) productIds = ids
 
     hiddenIds = pick(cfg('machineHidden') as Record<string, string[]> | undefined) ?? []
-    onHand    = pick(cfg('machineProductOnHand') as Record<string, Record<string, number>> | undefined) ?? {}
-    par       = pick(cfg('machineProductPar') as Record<string, Record<string, number>> | undefined) ?? {}
 
     // ── Step 3: load products, filtered by this machine's assignment ──────
     // Safety: if no assignment is found we show NOTHING rather than the entire
@@ -84,21 +84,21 @@ export async function loadMarketProducts(machineCode: string): Promise<Product[]
       // Never surface a $0 / unpriced item — that would be a free checkout.
       .filter((p: any) => (parseFloat(p.sellPrice) || 0) > 0)
       .map((p: any): Product => {
-      // A product is unavailable (hidden from customers) when an operator marked
-      // it Sold Out, OR when inventory tracking says the machine is empty.
-      // When there's no par/on-hand data (inventory not yet flowing) it stays
-      // available — we never hide something just because it's untracked.
+      // A product is unavailable ONLY when an operator explicitly marks it Sold
+      // Out (machineHidden) in vending-dash → Machine Inventory. We deliberately
+      // do NOT auto-hide on a 0 on-hand count: in this micro-market the customer
+      // grabs the physical item, and on-hand figures are seeded from historical
+      // imports (which drove best-sellers to 0), so auto-hiding silently erased
+      // real, in-stock products from the storefront. The kiosk now mirrors the
+      // assigned catalog 1:1; depletion is handled by the explicit Sold Out toggle.
       const manuallyHidden = hiddenSet.has(p.id)
-      const p_par = par[p.id] ?? 0
-      const p_onHand = onHand[p.id]
-      const emptyByInventory = p_par > 0 && p_onHand !== undefined && p_onHand <= 0
       return {
         id:        p.id,
         name:      p.name,
         upc:       (p.upc ?? '').trim(),
         price:     parseFloat(p.sellPrice) || 0,
         category:  (typeToCategory[p.type] ?? 'snacks') as Category,
-        available: !manuallyHidden && !emptyByInventory,
+        available: !manuallyHidden,
       }
     })
   } catch (err) {
