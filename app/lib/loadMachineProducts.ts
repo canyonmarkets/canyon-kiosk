@@ -22,14 +22,17 @@ export async function loadMarketProducts(machineCode: string): Promise<Product[]
   try {
     // ── Step 1: resolve machine code → database id ───────────────────────
     // machineProductIds is keyed by machine.id (e.g. 'm1'), not machine.code ('SF1')
-    const { data: machineRow } = await supabase
+    const { data: machineRow, error: machineErr } = await supabase
       .from('machines')
       .select('id')
       .eq('code', machineCode)
-      .single()
+      .maybeSingle()
+
+    if (machineErr) console.warn('[kiosk] machine lookup error for', machineCode, machineErr)
 
     // Use the DB id if found; fall back to the code itself (handles edge cases)
     const machineDbId = machineRow?.id ?? machineCode
+    console.log('[kiosk] machine lookup:', machineCode, '→', machineDbId)
 
     // ── Step 2: read per-machine config (assignments, sold-out, inventory) ─
     let productIds: string[] | null = null
