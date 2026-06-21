@@ -5,7 +5,7 @@ import type { Product, Category } from '../types'
 const typeToCategory: Record<string, Category> = {
   'Energy Drink': 'energy',
   'Soda':         'soda',
-  'Drink':        'other-drinks',
+  'Drink':        'soda',
   'Other Drink':  'other-drinks',
   'Ice Cream':    'ice-cream',
   'Food':         'food',
