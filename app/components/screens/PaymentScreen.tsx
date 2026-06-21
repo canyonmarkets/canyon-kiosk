@@ -226,7 +226,19 @@ export default function PaymentScreen({ onApproved, isActive }: { onApproved: (t
         </button>
       )}
 
-      <button className="btn-outline" onClick={() => { stopPolling(); setScreen('cart') }} style={{ marginTop: 4, padding: '14px 44px', fontSize: 18 }}>
+      <button className="btn-outline" onClick={async () => {
+        stopPolling()
+        if (refIdRef.current) {
+          try {
+            await fetch(`${SUPABASE_URL}/functions/v1/charge-cancel`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${SUPABASE_ANON_KEY}` },
+              body: JSON.stringify({ referenceId: refIdRef.current, machineId: config.machineId }),
+            })
+          } catch { /* non-fatal — reader will time out on its own */ }
+        }
+        setScreen('cart')
+      }} style={{ marginTop: 4, padding: '14px 44px', fontSize: 18 }}>
         ← Cancel &amp; Return to Cart
       </button>
     </div>
