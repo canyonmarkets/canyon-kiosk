@@ -1,10 +1,10 @@
 export type Category =
   | 'energy'
-  | 'drinks'
+  | 'soda'
+  | 'other-drinks'
   | 'snacks'
   | 'chips'
   | 'candy'
-  | 'crackers'
   | 'food'
   | 'ice-cream'
 
