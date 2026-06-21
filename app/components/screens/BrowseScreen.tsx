@@ -60,8 +60,8 @@ export default function BrowseScreen() {
       <div style={{
         flex: 1, padding: '20px 24px',
         display: 'grid',
-        gridTemplateColumns: 'repeat(3, 1fr)',
-        gridTemplateRows: `repeat(${Math.ceil(ACTIVE_CATEGORIES.length / 3)}, 1fr)`,
+        gridTemplateColumns: 'repeat(4, 1fr)',
+        gridTemplateRows: 'repeat(2, 1fr)',
         gap: 16, overflow: 'hidden',
       }}>
         {ACTIVE_CATEGORIES.map((cat) => {
