@@ -110,8 +110,11 @@ export default function PaymentScreen({ onApproved, isActive }: { onApproved: (t
       }, POLL_INTERVAL_MS)
 
     } catch (err) {
+      // Log the real error for diagnostics, but never show raw technical text
+      // to a customer at the terminal.
+      console.error('[payment] charge failed:', err)
       setPayStatus('error')
-      setErrorMsg(String(err))
+      setErrorMsg('We couldn’t start the payment. Please try again, or ask a team member for help.')
     }
   }
 

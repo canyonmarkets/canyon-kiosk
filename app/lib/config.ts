@@ -9,7 +9,7 @@ export const DEFAULT_CONFIG: MachineConfig = {
   locationName: 'Steel Fab',
   partnerName:  undefined,    // set for data center sites (e.g. 'Clayco Compute')
   taxRate:      0.091,        // 9.1% — Maricopa County, AZ
-  adminPin:     '1234',       // CHANGE THIS on first boot via Admin Panel
+  adminPin:     '0609',       // Canyon admin PIN (kiosk-side gate; see note below)
 }
 
 export const CONFIG_STORAGE_KEY = 'canyon-kiosk-config'
