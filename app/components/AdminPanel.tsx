@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { useKioskStore } from '../lib/store'
 import { supabase } from '../lib/supabase'
 import { loadMarketProducts } from '../lib/loadMachineProducts'
@@ -9,7 +9,7 @@ import type { MachineConfig } from '../types'
 const SET_CONFIG_URL = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/set-machine-config`
 const ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 
-async function setMachineConfig(key: 'machineHidden' | 'machineProductIds', machineId: string, value: unknown): Promise<void> {
+async function setMachineConfig(key: 'machineProductIds', machineId: string, value: unknown): Promise<void> {
   const res = await fetch(SET_CONFIG_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'apikey': ANON_KEY, 'Authorization': `Bearer ${ANON_KEY}` },
@@ -24,42 +24,15 @@ async function setMachineConfig(key: 'machineHidden' | 'machineProductIds', mach
 const MACHINE_IDS = ['SF1', 'SF2', 'CC1', 'CC2', 'MB', 'EARN', 'COMBS', 'ND', 'CAP']
 
 export default function AdminPanel({ onClose }: { onClose: () => void }) {
-  const { config, updateConfig, products, setProducts, toggleProductAvailable, transactions } = useKioskStore()
+  const { config, updateConfig, products, setProducts, transactions } = useKioskStore()
   const [tab, setTab] = useState<'sales' | 'products' | 'settings'>('sales')
   const [draft, setDraft] = useState<MachineConfig>({ ...config })
 
-  // Resolve this kiosk's machine DB id once, so sold-out writes target the
-  // same per-machine key (machineHidden[dbId]) the loader reads.
-  const [machineDbId, setMachineDbId] = useState<string>(config.machineId)
-  const [savingSoldOut, setSavingSoldOut] = useState<string | null>(null)
-  useEffect(() => {
-    let active = true
-    supabase.from('machines').select('id').eq('code', config.machineId).single()
-      .then(({ data }) => { if (active) setMachineDbId(data?.id ?? config.machineId) })
-    return () => { active = false }
-  }, [config.machineId])
-
-  // Toggle a product Sold Out for THIS machine and persist it to Supabase so it
-  // survives the 5-minute product refresh (the old local-only toggle reverted).
-  const toggleSoldOut = async (productId: string, currentlyAvailable: boolean) => {
-    setSavingSoldOut(productId)
-    toggleProductAvailable(productId)  // optimistic local update
-    try {
-      const { data: row } = await supabase
-        .from('app_config').select('value').eq('key', 'machineHidden').maybeSingle()
-      const all = (row?.value ?? {}) as Record<string, string[]>
-      const current = all[machineDbId] ?? []
-      const next = currentlyAvailable
-        ? [...new Set([...current, productId])]        // now hidden / sold out
-        : current.filter((id) => id !== productId)     // back in stock
-      await setMachineConfig('machineHidden', machineDbId, next)
-    } catch (e) {
-      console.warn('[admin] sold-out save failed', e)
-      toggleProductAvailable(productId)  // roll back the optimistic flip
-    } finally {
-      setSavingSoldOut(null)
-    }
-  }
+  // NOTE: there is intentionally NO "Sold Out" / hide control. Per Jeff
+  // (2026-06-21) the kiosk always displays every assigned product — an item
+  // that's physically out of stock simply can't be taken off the shelf and
+  // scanned, so it never needs hiding. The only kiosk→dashboard flow is the
+  // sale itself (a purchase decrements that machine's on-hand on the dashboard).
 
   // Diagnostics
   const [diagRunning, setDiagRunning] = useState(false)
@@ -276,47 +249,31 @@ export default function AdminPanel({ onClose }: { onClose: () => void }) {
           </div>
         )}
 
-        {/* ── Products tab ── */}
+        {/* ── Products tab (read-only catalog reference) ── */}
         {tab === 'products' && (
           <div>
             <p style={{ color: 'var(--text-muted)', fontSize: 13, marginBottom: 16 }}>
-              Mark items <strong>Sold Out</strong> to hide them on this machine — it saves to the
-              cloud and sticks across refreshes. Prices are set in the Canyon dashboard and shown
-              here for reference.
+              Every product assigned to this machine is shown here and on the storefront —
+              the kiosk always displays the full list. Products and prices are managed in the
+              Canyon dashboard; this is a read-only reference.
             </p>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
               <thead>
                 <tr style={{ borderBottom: '1px solid var(--border)' }}>
-                  {['Product', 'Category', 'Price', 'Available'].map((h) => (
+                  {['Product', 'Category', 'Price'].map((h) => (
                     <th key={h} style={{ padding: '10px 12px', textAlign: 'left', color: 'var(--text-muted)', fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.08em' }}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {products.map((p) => (
-                  <tr key={p.id} style={{ borderBottom: '1px solid var(--border)', opacity: p.available ? 1 : 0.45 }}>
+                  <tr key={p.id} style={{ borderBottom: '1px solid var(--border)' }}>
                     <td style={{ padding: '10px 12px', color: 'var(--text)', fontWeight: 500 }}>{p.name}</td>
                     <td style={{ padding: '10px 12px', color: 'var(--text-muted)', textTransform: 'capitalize' }}>{p.category}</td>
                     <td style={{ padding: '10px 12px' }}>
-                      {/* Read-only — prices are managed in the Canyon dashboard */}
                       <span style={{ color: 'var(--text-muted)', fontVariantNumeric: 'tabular-nums' }}>
                         ${p.price.toFixed(2)}
                       </span>
-                    </td>
-                    <td style={{ padding: '10px 12px' }}>
-                      <button
-                        onClick={() => toggleSoldOut(p.id, p.available)}
-                        disabled={savingSoldOut === p.id}
-                        style={{
-                          padding: '5px 14px', borderRadius: 6, fontSize: 12, fontWeight: 700,
-                          border: 'none', cursor: savingSoldOut === p.id ? 'wait' : 'pointer',
-                          opacity: savingSoldOut === p.id ? 0.6 : 1,
-                          background: p.available ? 'var(--green-dim)' : 'rgba(220,38,38,0.15)',
-                          color: p.available ? 'var(--green)' : 'var(--red)',
-                        }}
-                      >
-                        {savingSoldOut === p.id ? 'Saving…' : p.available ? '✓ Available' : '✕ Sold Out'}
-                      </button>
                     </td>
                   </tr>
                 ))}

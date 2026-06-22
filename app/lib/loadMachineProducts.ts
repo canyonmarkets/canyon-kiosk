@@ -35,18 +35,18 @@ export async function loadMarketProducts(machineCode: string): Promise<Product[]
     const machineDbId = machineRow?.id ?? machineCode
     console.log('[kiosk] machine lookup:', machineCode, '→', machineDbId)
 
-    // ── Step 2: read per-machine config (assignments + operator Sold-Out list) ─
+    // ── Step 2: read this machine's product assignments ───────────────────
+    // Only machineProductIds is read. The kiosk intentionally fetches NO
+    // stock/sold-out config: per Jeff (2026-06-21) every assigned product stays
+    // on the storefront at all times. Items are hand-scanned, so a customer can
+    // only buy what's physically in hand — an out-of-stock item simply never
+    // gets scanned. Nothing is ever removed from the kiosk for availability.
     let productIds: string[] | null = null
-    let hiddenIds: string[] = []                          // manually marked sold-out
 
-    // We only need assignments + the Sold-Out list. machineProductOnHand /
-    // machineProductPar are intentionally NOT fetched anymore: the kiosk no
-    // longer auto-hides on stock count (see availability note below), and
-    // skipping those two large configs (~40KB combined) trims the load payload.
     const { data: configRows } = await supabase
       .from('app_config')
       .select('key, value')
-      .in('key', ['machineProductIds', 'machineHidden'])
+      .eq('key', 'machineProductIds')
 
     const cfg = (k: string) => configRows?.find((r: { key: string; value: unknown }) => r.key === k)?.value
     const pick = <T,>(m: Record<string, T> | undefined): T | undefined => m?.[machineDbId] ?? m?.[machineCode]
@@ -54,8 +54,6 @@ export async function loadMarketProducts(machineCode: string): Promise<Product[]
     const assignments = cfg('machineProductIds') as Record<string, string[]> | undefined
     const ids = pick(assignments)
     if (Array.isArray(ids) && ids.length > 0) productIds = ids
-
-    hiddenIds = pick(cfg('machineHidden') as Record<string, string[]> | undefined) ?? []
 
     // ── Step 3: load products, filtered by this machine's assignment ──────
     // Safety: if no assignment is found we show NOTHING rather than the entire
@@ -78,29 +76,21 @@ export async function loadMarketProducts(machineCode: string): Promise<Product[]
       return []
     }
 
-    const hiddenSet = new Set(hiddenIds)
-
     return data
       // Never surface a $0 / unpriced item — that would be a free checkout.
+      // (Not an availability rule — a safety guard against a missing price.)
       .filter((p: any) => (parseFloat(p.sellPrice) || 0) > 0)
-      .map((p: any): Product => {
-      // A product is unavailable ONLY when an operator explicitly marks it Sold
-      // Out (machineHidden) in vending-dash → Machine Inventory. We deliberately
-      // do NOT auto-hide on a 0 on-hand count: in this micro-market the customer
-      // grabs the physical item, and on-hand figures are seeded from historical
-      // imports (which drove best-sellers to 0), so auto-hiding silently erased
-      // real, in-stock products from the storefront. The kiosk now mirrors the
-      // assigned catalog 1:1; depletion is handled by the explicit Sold Out toggle.
-      const manuallyHidden = hiddenSet.has(p.id)
-      return {
+      .map((p: any): Product => ({
         id:        p.id,
         name:      p.name,
         upc:       (p.upc ?? '').trim(),
         price:     parseFloat(p.sellPrice) || 0,
         category:  (typeToCategory[p.type] ?? 'snacks') as Category,
-        available: !manuallyHidden,
-      }
-    })
+        // Always available. The kiosk never removes an assigned item for being
+        // out of stock or marked sold out — hand-scanning is the only gate
+        // (you can't scan what isn't physically on the shelf). See Step 2.
+        available: true,
+      }))
   } catch (err) {
     console.warn('[kiosk] Supabase connection error', err)
     return []
