@@ -2,7 +2,6 @@ import Stripe from 'npm:stripe@17'
 import { createClient } from 'npm:@supabase/supabase-js@2'
 
 const STRIPE_SECRET_KEY = Deno.env.get('STRIPE_SECRET_KEY')!
-const STRIPE_READER_ID  = Deno.env.get('STRIPE_READER_ID')!
 const SUPABASE_URL      = Deno.env.get('SUPABASE_URL')!
 const SUPABASE_SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 
@@ -23,6 +22,19 @@ Deno.serve(async (req) => {
     }
 
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+
+    // Look up the reader for this machine
+    const { data: machine, error: machineErr } = await supabase
+      .from('machines')
+      .select('stripe_reader_id, name')
+      .eq('code', machineId ?? '')
+      .maybeSingle()
+    if (machineErr || !machine?.stripe_reader_id) {
+      return new Response(JSON.stringify({ error: `No reader configured for machine: ${machineId}` }), {
+        status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      })
+    }
+    const STRIPE_READER_ID = machine.stripe_reader_id
 
     // Idempotency guard: if a payment row already exists for this referenceId,
     // return its current status without creating a second PaymentIntent.
