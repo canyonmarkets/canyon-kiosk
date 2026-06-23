@@ -60,6 +60,14 @@ Deno.serve(async (req) => {
         .eq('reference_id', referenceId)
     }
 
+    // Also flip the bridge row so it is not left dangling as PENDING forever.
+    // (Only ever touches our own still-pending row; PROCESSED rows are untouched.)
+    await supabase
+      .from('kiosk_sales')
+      .update({ status: 'CANCELED', completed_at: null })
+      .eq('id', referenceId)
+      .eq('status', 'PENDING')
+
     return new Response(JSON.stringify({ ok: true }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' }
     })
