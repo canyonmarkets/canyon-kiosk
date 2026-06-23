@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { useKioskStore } from './lib/store'
 import { loadMarketProducts } from './lib/loadMachineProducts'
+import { supabase } from './lib/supabase'
 import IdleScreen      from './components/screens/IdleScreen'
 import BrowseScreen    from './components/screens/BrowseScreen'
 import ProductsScreen  from './components/screens/ProductsScreen'
@@ -228,13 +229,19 @@ export default function KioskPage() {
   // ── Heartbeat: ping every 5 minutes ──────────────────────────────────────
   useEffect(() => {
     const sendHeartbeat = async () => {
+      // Write straight to Supabase. (The kiosk is a static export — `/api/heartbeat`
+      // does not exist on the deployed site, so the old fetch silently 404'd and no
+      // heartbeat was ever recorded.) machine_heartbeats allows this write; PK = machine_code.
       try {
-        await fetch('/api/heartbeat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ machineId: config.machineId, ts: new Date().toISOString() }),
-        })
-      } catch { /* offline — heartbeat server will notice the gap */ }
+        await supabase.from('machine_heartbeats').upsert(
+          {
+            machine_code: config.machineId,
+            last_seen: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: 'machine_code' },
+        )
+      } catch { /* offline — heartbeat monitor will notice the gap */ }
     }
     sendHeartbeat()
     const interval = setInterval(sendHeartbeat, 5 * 60 * 1000)
