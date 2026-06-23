@@ -78,9 +78,18 @@ export default function PaymentScreen({ onApproved, isActive }: { onApproved: (t
 
       setPayStatus('waiting')
 
-      // Timeout — if terminal never responds
+      // Timeout — if terminal never responds. Also cancel the reader action so the
+      // terminal clears and a late tap can't charge the next customer / leave the
+      // reader busy. Mirrors the "Cancel & Return to Cart" button below.
       timerRef.current = setTimeout(() => {
         stopPolling()
+        if (refIdRef.current) {
+          fetch(`${SUPABASE_URL}/functions/v1/charge-cancel`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${SUPABASE_ANON_KEY}` },
+            body: JSON.stringify({ referenceId: refIdRef.current, machineId: config.machineId }),
+          }).catch(() => { /* non-fatal — reader times out on its own */ })
+        }
         setPayStatus('timeout')
         setTimeout(() => setScreen('cart'), 4000)
       }, PAYMENT_TIMEOUT_SEC * 1000)
