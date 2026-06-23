@@ -59,7 +59,6 @@ export default function PaymentScreen({ onApproved, isActive }: { onApproved: (t
     }))
     const subtotal = cartSubtotal()
     const tax = cartTax()
-    console.log('[payment] startPayment called', { amountCents, referenceId, SUPABASE_URL, total })
 
     try {
       const res = await fetch(`${SUPABASE_URL}/functions/v1/charge`, {
@@ -128,7 +127,6 @@ export default function PaymentScreen({ onApproved, isActive }: { onApproved: (t
   }
 
   useEffect(() => {
-    console.log('[payment] isActive changed:', isActive)
     if (!isActive) {
       stopPolling()
       setPayStatus('idle')
