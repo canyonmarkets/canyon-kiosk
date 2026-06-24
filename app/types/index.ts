@@ -14,6 +14,7 @@ export interface Product {
   price: number         // dollars (e.g. 3.25)
   category: Category
   upc?: string
+  upc2?: string         // optional 2nd barcode (multipack vs single) — same product
   available: boolean    // false = sold out / hidden
 }
 

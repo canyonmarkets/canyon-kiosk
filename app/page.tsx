@@ -133,9 +133,14 @@ export default function KioskPage() {
     const stripLeadingZeros = (s: string) => s.replace(/^0+/, '') || s
     const normalizedRaw = stripLeadingZeros(raw)
     const products = useKioskStore.getState().products
+    // Match against EITHER barcode on the product (primary UPC or the optional 2nd
+    // barcode, e.g. a multipack vs. single) — both ring up the same item.
     const product = products.find((p) => {
-      const stored = (p.upc ?? '').trim()
-      return stored && stripLeadingZeros(stored) === normalizedRaw && p.available
+      if (!p.available) return false
+      return [p.upc, p.upc2].some((code) => {
+        const stored = (code ?? '').trim()
+        return stored && stripLeadingZeros(stored) === normalizedRaw
+      })
     })
     if (product) {
       useKioskStore.getState().addToCart(product)

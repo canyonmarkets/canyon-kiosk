@@ -67,7 +67,7 @@ export async function loadMarketProducts(machineCode: string): Promise<Product[]
 
     const { data, error } = await supabase
       .from('products')
-      .select('id, name, upc, type, sellPrice')
+      .select('id, name, upc, upc2, type, sellPrice')
       .eq('status', 'Active')
       .in('id', productIds)
 
@@ -84,6 +84,7 @@ export async function loadMarketProducts(machineCode: string): Promise<Product[]
         id:        p.id,
         name:      p.name,
         upc:       (p.upc ?? '').trim(),
+        upc2:      (p.upc2 ?? '').trim(),
         price:     parseFloat(p.sellPrice) || 0,
         category:  (typeToCategory[p.type] ?? 'snacks') as Category,
         // Always available. The kiosk never removes an assigned item for being
