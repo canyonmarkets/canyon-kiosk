@@ -110,25 +110,30 @@ export default function CartScreen() {
         </div>
 
         <div style={{ display: 'flex', gap: 14, alignItems: 'stretch' }}>
-          <button className="btn-outline" onClick={() => setScreen('browse')} style={{ flex: 1, padding: 18 }}>
-            + Browse More
+          <button className="btn-outline" onClick={() => setScreen('browse')} style={{ flex: '0 0 auto', width: 140, padding: '18px 10px', fontSize: 16 }}>
+            + Browse
           </button>
           <button
             onClick={() => { clearCart(); setScreen('idle') }}
-            title="Return to home screen"
+            title="Cancel & return home"
             style={{
-              width: 64, flexShrink: 0, borderRadius: 12, border: '1px solid var(--border)',
-              background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer',
-              display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 26,
+              flex: 1, borderRadius: 12, border: '2px solid var(--border)',
+              background: 'var(--surface-2)', color: 'var(--text-muted)', cursor: 'pointer',
+              display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+              gap: 4, padding: '14px 10px',
             }}
           >
-            🏠
+            <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+              <polyline points="9 22 9 12 15 12 15 22"/>
+            </svg>
+            <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase' }}>Home</span>
           </button>
           <button
             className="btn-primary"
             onClick={() => setScreen('payment')}
             disabled={cart.length === 0}
-            style={{ flex: 1, padding: 18, fontSize: 21 }}
+            style={{ flex: '0 0 auto', width: 140, padding: '18px 10px', fontSize: 18 }}
           >
             Pay Now →
           </button>
