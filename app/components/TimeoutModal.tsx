@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react'
 import { useKioskStore } from '../lib/store'
 
-const COUNTDOWN_SEC = 60
+const COUNTDOWN_SEC = 20
 
 interface Props {
   visible: boolean
