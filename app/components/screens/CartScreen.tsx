@@ -110,30 +110,30 @@ export default function CartScreen() {
         </div>
 
         <div style={{ display: 'flex', gap: 14, alignItems: 'stretch' }}>
-          <button className="btn-outline" onClick={() => setScreen('browse')} style={{ flex: '0 0 auto', width: 140, padding: '18px 10px', fontSize: 16 }}>
+          <button className="btn-outline" onClick={() => setScreen('browse')} style={{ flex: 1, padding: 18 }}>
             + Browse
           </button>
           <button
             onClick={() => { clearCart(); setScreen('idle') }}
             title="Cancel & return home"
             style={{
-              flex: 1, borderRadius: 12, border: '2px solid var(--border)',
-              background: 'var(--surface-2)', color: 'var(--text-muted)', cursor: 'pointer',
+              flex: 1, borderRadius: 12, border: '2px solid var(--ember)',
+              background: 'transparent', color: 'var(--ember)', cursor: 'pointer',
               display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-              gap: 4, padding: '14px 10px',
+              gap: 5, padding: '14px 10px',
             }}
           >
-            <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <svg xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
               <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
               <polyline points="9 22 9 12 15 12 15 22"/>
             </svg>
-            <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase' }}>Home</span>
+            <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase' }}>Home</span>
           </button>
           <button
             className="btn-primary"
             onClick={() => setScreen('payment')}
             disabled={cart.length === 0}
-            style={{ flex: '0 0 auto', width: 140, padding: '18px 10px', fontSize: 18 }}
+            style={{ flex: 1, padding: 18, fontSize: 21 }}
           >
             Pay Now →
           </button>

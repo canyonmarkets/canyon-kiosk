@@ -13,7 +13,7 @@ import TimeoutModal    from './components/TimeoutModal'
 import OfflineBanner   from './components/OfflineBanner'
 import AdminPanel      from './components/AdminPanel'
 
-const CART_IDLE_SECONDS = 10  // 10 seconds — high-throughput sites need fast turnover
+const CART_IDLE_SECONDS = 20  // 20 seconds — fast turnover for high-traffic sites
 
 export default function KioskPage() {
   const { screen, setScreen, clearCart, cart, config, setProducts, productsLoading } = useKioskStore()
