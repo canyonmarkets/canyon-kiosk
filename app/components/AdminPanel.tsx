@@ -3,30 +3,19 @@ import { useState } from 'react'
 import { useKioskStore } from '../lib/store'
 import { supabase } from '../lib/supabase'
 import { loadMarketProducts } from '../lib/loadMachineProducts'
-import { X, Save, RefreshCw } from 'lucide-react'
-import type { MachineConfig } from '../types'
+import { X, RefreshCw } from 'lucide-react'
 
-const SET_CONFIG_URL = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/set-machine-config`
-const ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-
-async function setMachineConfig(key: 'machineProductIds', machineId: string, value: unknown): Promise<void> {
-  const res = await fetch(SET_CONFIG_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'apikey': ANON_KEY, 'Authorization': `Bearer ${ANON_KEY}` },
-    body: JSON.stringify({ key, machineId, value }),
-  })
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}))
-    throw new Error(body.error ?? `HTTP ${res.status}`)
-  }
-}
-
-const MACHINE_IDS = ['SF1', 'SF2', 'CC1', 'CC2', 'MB', 'EARN', 'COMBS', 'ND', 'CAP']
+// ─── READ-ONLY PANEL (owner direction, 2026-07-04) ──────────────────────────
+// The on-kiosk Admin Panel performs NO writes of any kind. All product
+// assignment / config management happens in vending-dash (authenticated).
+// app_config RLS is anon-read / authenticated-write, so kiosk-side writes
+// would silently fail anyway — the mutating UI (add-product fix buttons,
+// settings editor) was removed. What remains: today's sales, the assigned
+// catalog, machine/config info, Restart App, and read-only sync diagnostics.
 
 export default function AdminPanel({ onClose }: { onClose: () => void }) {
-  const { config, updateConfig, products, setProducts, transactions } = useKioskStore()
+  const { config, products, setProducts, transactions } = useKioskStore()
   const [tab, setTab] = useState<'sales' | 'products' | 'settings'>('sales')
-  const [draft, setDraft] = useState<MachineConfig>({ ...config })
 
   // NOTE: there is intentionally NO "Sold Out" / hide control. Per Jeff
   // (2026-06-21) the kiosk always displays every assigned product — an item
@@ -34,18 +23,14 @@ export default function AdminPanel({ onClose }: { onClose: () => void }) {
   // scanned, so it never needs hiding. The only kiosk→dashboard flow is the
   // sale itself (a purchase decrements that machine's on-hand on the dashboard).
 
-  // Diagnostics
+  // Diagnostics (read-only — refreshes the local catalog, never writes to the DB)
   const [diagRunning, setDiagRunning] = useState(false)
   const [diagResult, setDiagResult] = useState<string[] | null>(null)
-  const [fixableProducts, setFixableProducts] = useState<Array<{id: string; name: string; upc: string}>>([])
-  const [fixing, setFixing] = useState<string | null>(null)
 
   const runDiagnostics = async () => {
     setDiagRunning(true)
     setDiagResult(null)
-    setFixableProducts([])
     const lines: string[] = []
-    const newFixable: Array<{id: string; name: string; upc: string}> = []
     try {
       const machineCode = config.machineId
       lines.push(`Machine code in config: "${machineCode}"`)
@@ -84,27 +69,10 @@ export default function AdminPanel({ onClose }: { onClose: () => void }) {
           .from('products').select('id, name, upc').in('id', assignedIds).eq('status', 'Active')
         const activeIds = new Set((activeRows ?? []).map((r: any) => r.id))
         const staleCount = assignedIds.filter(id => !activeIds.has(id)).length
-        if (staleCount > 0) lines.push(`⚠️ ${staleCount} stale UUIDs in list (can be cleaned up)`)
+        if (staleCount > 0) lines.push(`⚠️ ${staleCount} stale UUIDs in list (clean up in vending-dash)`)
       }
 
-      // Step 4: search all Skittles globally
-      lines.push(`\n--- Skittles Check ---`)
-      const { data: globalSkittles } = await supabase
-        .from('products').select('id, name, upc, status')
-        .ilike('name', '%skittles%')
-      if (!globalSkittles || globalSkittles.length === 0) {
-        lines.push(`❌ No Skittles in global inventory`)
-      } else {
-        globalSkittles.forEach((s: any) => {
-          const inList = assignedIds.includes(s.id)
-          lines.push(`"${s.name}" | UPC: ${s.upc || '(empty)'} | Status: ${s.status} | ${inList ? 'Assigned ✅' : 'NOT assigned ❌'}`)
-          if (!inList && s.status === 'Active') {
-            newFixable.push({ id: s.id, name: s.name, upc: s.upc ?? '' })
-          }
-        })
-      }
-
-      // Step 5: force-reload
+      // Step 4: force-reload the local catalog (read-only against the DB)
       lines.push(`\nReloading products...`)
       const freshProducts = await loadMarketProducts(machineCode)
       lines.push(`✅ Loaded: ${freshProducts.length} products`)
@@ -116,40 +84,7 @@ export default function AdminPanel({ onClose }: { onClose: () => void }) {
       lines.push(`❌ Error: ${e?.message ?? String(e)}`)
     }
     setDiagResult(lines)
-    setFixableProducts(newFixable)
     setDiagRunning(false)
-  }
-
-  const fixAssignment = async (productId: string, productName: string) => {
-    setFixing(productId)
-    try {
-      const machineCode = config.machineId
-      const { data: machineRow } = await supabase
-        .from('machines').select('id').eq('code', machineCode).single()
-      const dbId = machineRow?.id ?? machineCode
-
-      // Always read fresh from Supabase before writing
-      const { data: cfgRow } = await supabase
-        .from('app_config').select('value').eq('key', 'machineProductIds').single()
-      const all = (cfgRow?.value ?? {}) as Record<string, string[]>
-      const current = all[dbId] ?? []
-
-      if (current.includes(productId)) {
-        setDiagResult(prev => [...(prev ?? []), `ℹ️ Already assigned`])
-        return
-      }
-
-      const updated = [...current, productId]
-      await setMachineConfig('machineProductIds', dbId, updated)
-      setFixableProducts(prev => prev.filter(p => p.id !== productId))
-      const freshProducts = await loadMarketProducts(machineCode)
-      if (freshProducts.length > 0) setProducts(freshProducts)
-      setDiagResult(prev => [...(prev ?? []), `✅ "${productName}" added to ${machineCode}! Kiosk updated.`])
-    } catch (e: any) {
-      setDiagResult(prev => [...(prev ?? []), `❌ Error: ${e?.message ?? String(e)}`])
-    } finally {
-      setFixing(null)
-    }
   }
 
   // Today's sales
@@ -157,11 +92,6 @@ export default function AdminPanel({ onClose }: { onClose: () => void }) {
   const todayTx = transactions.filter((tx) => new Date(tx.completedAt).toDateString() === today)
   const todayRevenue = todayTx.reduce((s, tx) => s + tx.total, 0)
   const todayCount   = todayTx.length
-
-  const saveSettings = () => {
-    updateConfig(draft)
-    alert('Settings saved!')
-  }
 
   const reboot = () => {
     if (confirm('Restart the kiosk app?')) window.location.reload()
@@ -282,45 +212,30 @@ export default function AdminPanel({ onClose }: { onClose: () => void }) {
           </div>
         )}
 
-        {/* ── Settings tab ── */}
+        {/* ── Settings tab (read-only info — identity comes from the ?machine= start URL) ── */}
         {tab === 'settings' && (
           <div style={{ maxWidth: 480, display: 'flex', flexDirection: 'column', gap: 20 }}>
+            <p style={{ color: 'var(--text-muted)', fontSize: 13, lineHeight: 1.5 }}>
+              This panel is read-only. Machine identity is pinned by the kiosk&rsquo;s start URL
+              (<span style={{ fontFamily: 'monospace' }}>?machine={config.machineId}</span>) and all
+              configuration is managed in the Canyon dashboard.
+            </p>
             {[
-              { label: 'Machine ID', key: 'machineId', type: 'select', options: MACHINE_IDS },
-              { label: 'Location Name', key: 'locationName', type: 'text' },
-              { label: 'Partner Name (optional)', key: 'partnerName', type: 'text' },
-              { label: 'Admin PIN', key: 'adminPin', type: 'text' },
-            ].map(({ label, key, type, options }) => (
-              <div key={key}>
+              { label: 'Machine ID',    value: config.machineId },
+              { label: 'Location Name', value: config.locationName },
+              { label: 'Partner Name',  value: config.partnerName ?? '—' },
+              { label: 'Tax Rate',      value: `${(config.taxRate * 100).toFixed(1)}%` },
+              { label: 'Products Loaded', value: String(products.length) },
+            ].map(({ label, value }) => (
+              <div key={label}>
                 <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 8 }}>
                   {label}
                 </div>
-                {type === 'select' ? (
-                  <select
-                    value={(draft as unknown as Record<string, string>)[key] ?? ''}
-                    onChange={(e) => setDraft((d) => ({ ...d, [key]: e.target.value }))}
-                    style={{ width: '100%', padding: '11px 14px', background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 8, color: 'white', fontSize: 15 }}
-                  >
-                    {options!.map((o) => <option key={o} value={o}>{o}</option>)}
-                  </select>
-                ) : (
-                  <input
-                    type="text"
-                    value={(draft as unknown as Record<string, string>)[key] ?? ''}
-                    onChange={(e) => setDraft((d) => ({ ...d, [key]: e.target.value }))}
-                    style={{ width: '100%', padding: '11px 14px', background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 8, color: 'white', fontSize: 15 }}
-                  />
-                )}
+                <div style={{ width: '100%', padding: '11px 14px', background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 8, color: 'white', fontSize: 15 }}>
+                  {value}
+                </div>
               </div>
             ))}
-
-            <button onClick={saveSettings} style={{
-              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-              padding: '14px 0', background: 'var(--ember)', border: 'none', color: 'white',
-              borderRadius: 10, fontSize: 15, fontWeight: 700, cursor: 'pointer',
-            }}>
-              <Save size={16} /> Save Settings
-            </button>
 
             <button onClick={reboot} style={{
               display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
@@ -358,32 +273,6 @@ export default function AdminPanel({ onClose }: { onClose: () => void }) {
                   whiteSpace: 'pre-wrap', maxHeight: 280, overflowY: 'auto',
                 }}>
                   {diagResult.join('\n')}
-                </div>
-              )}
-
-              {fixableProducts.length > 0 && (
-                <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-                    Found in inventory but not assigned — tap to add:
-                  </div>
-                  {fixableProducts.map((p) => (
-                    <button
-                      key={p.id}
-                      onClick={() => fixAssignment(p.id, p.name)}
-                      disabled={fixing === p.id}
-                      style={{
-                        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                        padding: '12px 16px', background: 'rgba(34,197,94,0.1)',
-                        border: '1px solid rgba(34,197,94,0.4)', borderRadius: 8,
-                        color: '#86efac', cursor: fixing === p.id ? 'wait' : 'pointer', fontSize: 13,
-                      }}
-                    >
-                      <span style={{ fontWeight: 600 }}>{p.name}</span>
-                      <span style={{ opacity: 0.7, fontSize: 11 }}>
-                        {fixing === p.id ? 'Adding…' : '＋ Add to This Machine'}
-                      </span>
-                    </button>
-                  ))}
                 </div>
               )}
             </div>

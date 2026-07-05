@@ -1,8 +1,11 @@
 'use client'
 import { create } from 'zustand'
 import type { CartItem, Product, Screen, Transaction, MachineConfig } from '../types'
-import { PRODUCTS } from './products'
 import { loadConfig, saveConfig, CONFIG_STORAGE_KEY } from './config'
+
+// Sanity cap per line item — prevents a runaway "+" tap loop (stuck touch panel,
+// kids mashing the button) from building an absurd charge.
+const MAX_QTY_PER_ITEM = 99
 
 interface KioskStore {
   // Screen
@@ -48,25 +51,30 @@ export const useKioskStore = create<KioskStore>()((set, get) => ({
   addToCart: (product) => set((s) => {
     const existing = s.cart.find((i) => i.product.id === product.id)
     if (existing) {
-      return { cart: s.cart.map((i) => i.product.id === product.id ? { ...i, qty: i.qty + 1 } : i) }
+      return { cart: s.cart.map((i) => i.product.id === product.id ? { ...i, qty: Math.min(i.qty + 1, MAX_QTY_PER_ITEM) } : i) }
     }
     return { cart: [...s.cart, { product, qty: 1 }] }
   }),
   removeFromCart: (productId) => set((s) => ({ cart: s.cart.filter((i) => i.product.id !== productId) })),
   changeQty: (productId, delta) => set((s) => {
-    const updated = s.cart.map((i) => i.product.id === productId ? { ...i, qty: i.qty + delta } : i)
+    const updated = s.cart.map((i) => i.product.id === productId ? { ...i, qty: Math.min(i.qty + delta, MAX_QTY_PER_ITEM) } : i)
     return { cart: updated.filter((i) => i.qty > 0) }
   }),
   clearCart: () => set({ cart: [] }),
   cartSubtotal: () => get().cart.reduce((sum, i) => sum + i.product.price * i.qty, 0),
   cartTax: () => {
+    // Round to whole cents so the on-screen Subtotal + Tax always equals the
+    // Total the card is charged (raw float tax could display a penny off).
     const sub = get().cartSubtotal()
-    return sub * get().config.taxRate
+    return Math.round(sub * get().config.taxRate * 100) / 100
   },
   cartTotal: () => get().cartSubtotal() + get().cartTax(),
   cartCount: () => get().cart.reduce((sum, i) => sum + i.qty, 0),
 
-  products: PRODUCTS,
+  // Starts EMPTY — the real catalog loads from Supabase on boot. A live kiosk
+  // must never sell from a placeholder list: demo items don't exist in the DB,
+  // so their sales couldn't be ingested and prices could be wrong.
+  products: [],
   productsLoading: true,
   setProducts: (products) => set({ products, productsLoading: false }),
   updateProductPrice: (id, price) => set((s) => ({

@@ -4,6 +4,12 @@ import { useKioskStore } from '../../lib/store'
 
 const PAYMENT_TIMEOUT_SEC = 90
 const POLL_INTERVAL_MS = 2500
+// If the charge edge function never answers, abort — a hung request must not
+// strand the kiosk on "Sending to terminal…" forever (worst case on a dead network).
+const CHARGE_CONNECT_TIMEOUT_MS = 20000
+// If the payment errored and nobody taps Retry/Cancel, self-recover to the cart
+// (the cart's own idle timer then returns the kiosk to the attract screen).
+const ERROR_RETURN_SEC = 45
 const SUPABASE_URL = 'https://zgmxmficzvlpzkosdcnx.supabase.co'
 const SUPABASE_ANON_KEY = 'sb_publishable_MUAaPltQkyDFsR0NvLTikQ_gY_pfJFy'
 
@@ -14,6 +20,7 @@ export default function PaymentScreen({ onApproved, isActive }: { onApproved: (t
   const timerRef   = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pollRef    = useRef<ReturnType<typeof setInterval> | null>(null)
   const refIdRef   = useRef<string | null>(null)
+  const approvedRef = useRef(false)  // guards handleApproved from double-firing
   const [payStatus, setPayStatus] = useState<PayStatus>('idle')
   const [errorMsg,  setErrorMsg]  = useState<string | null>(null)
   const total = cartTotal()
@@ -24,6 +31,11 @@ export default function PaymentScreen({ onApproved, isActive }: { onApproved: (t
   }
 
   const handleApproved = () => {
+    // Two slow overlapping status polls can both resolve PROCESSED and both
+    // schedule this callback — the second run would record a phantom $0
+    // transaction from the already-cleared cart. Run exactly once per payment.
+    if (approvedRef.current) return
+    approvedRef.current = true
     stopPolling()
     // Capture totals BEFORE clearing the cart — both the saved transaction and
     // the thank-you screen need them, and clearCart() would zero them out.
@@ -47,6 +59,8 @@ export default function PaymentScreen({ onApproved, isActive }: { onApproved: (t
   }
 
   const startPayment = async () => {
+    stopPolling()               // clear any stale timers (error auto-return, prior attempt)
+    approvedRef.current = false
     const amountCents = Math.round(total * 100)
     const referenceId = `${config.machineId}-${Date.now()}`
     refIdRef.current = referenceId
@@ -61,14 +75,24 @@ export default function PaymentScreen({ onApproved, isActive }: { onApproved: (t
     const tax = cartTax()
 
     try {
-      const res = await fetch(`${SUPABASE_URL}/functions/v1/charge`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
-        },
-        body: JSON.stringify({ amountCents, referenceId, machineId: config.machineId, items, subtotal, tax }),
-      })
+      // Abort a hung request — on a flaky network a fetch can stall for minutes,
+      // which would freeze the kiosk on the "sending" spinner with no way out.
+      const controller = new AbortController()
+      const connectTimer = setTimeout(() => controller.abort(), CHARGE_CONNECT_TIMEOUT_MS)
+      let res: Response
+      try {
+        res = await fetch(`${SUPABASE_URL}/functions/v1/charge`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+          },
+          body: JSON.stringify({ amountCents, referenceId, machineId: config.machineId, items, subtotal, tax }),
+          signal: controller.signal,
+        })
+      } finally {
+        clearTimeout(connectTimer)
+      }
 
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: 'Unknown error' }))
@@ -90,7 +114,10 @@ export default function PaymentScreen({ onApproved, isActive }: { onApproved: (t
           }).catch(() => { /* non-fatal — reader times out on its own */ })
         }
         setPayStatus('timeout')
-        setTimeout(() => setScreen('cart'), 4000)
+        // Track the return-to-cart nav in timerRef so stopPolling() (cancel button,
+        // screen change, a new payment attempt) clears it — a stale navigation
+        // firing into a NEXT payment attempt would abandon a live charge.
+        timerRef.current = setTimeout(() => setScreen('cart'), 4000)
       }, PAYMENT_TIMEOUT_SEC * 1000)
 
       // Poll for terminal result
@@ -102,15 +129,19 @@ export default function PaymentScreen({ onApproved, isActive }: { onApproved: (t
           )
           const { status } = await statusRes.json()
           if (status === 'PROCESSED') {
+            // Stop timers NOW — otherwise the 90s timeout (or a second slow poll)
+            // could still fire during the 800ms approval pause and cancel/dupe an
+            // already-successful charge.
+            stopPolling()
             setPayStatus('approved')
-            setTimeout(handleApproved, 800)
+            timerRef.current = setTimeout(handleApproved, 800)
           } else if (status === 'CANCELED') {
             // Return to the cart on a decline/cancel instead of silently re-sending
             // a brand-new charge in a loop (which risked double charges and a
             // terminal left armed). The shopper re-initiates payment deliberately.
             stopPolling()
             setPayStatus('declined')
-            setTimeout(() => setScreen('cart'), 3500)
+            timerRef.current = setTimeout(() => setScreen('cart'), 3500)
           }
         } catch {
           // network blip — keep polling
@@ -121,8 +152,13 @@ export default function PaymentScreen({ onApproved, isActive }: { onApproved: (t
       // Log the real error for diagnostics, but never show raw technical text
       // to a customer at the terminal.
       console.error('[payment] charge failed:', err)
+      stopPolling()
       setPayStatus('error')
       setErrorMsg('We couldn’t start the payment. Please try again, or ask a team member for help.')
+      // Self-recover: if nobody taps Retry/Cancel (customer walked away), return
+      // to the cart so the kiosk can idle back to the attract screen on its own —
+      // never leave a broken screen up waiting for manual intervention.
+      timerRef.current = setTimeout(() => setScreen('cart'), ERROR_RETURN_SEC * 1000)
     }
   }
 
@@ -132,6 +168,7 @@ export default function PaymentScreen({ onApproved, isActive }: { onApproved: (t
       setPayStatus('idle')
       setErrorMsg(null)
       refIdRef.current = null
+      approvedRef.current = false
       return
     }
     startPayment()

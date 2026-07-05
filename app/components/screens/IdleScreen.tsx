@@ -3,7 +3,12 @@ import Image from 'next/image'
 import { useKioskStore } from '../../lib/store'
 
 export default function IdleScreen() {
-  const { setScreen, config, productsLoading } = useKioskStore()
+  const { setScreen, config, productsLoading, products } = useKioskStore()
+
+  // Catalog failed to load (or machine has no assignments) — the storefront is
+  // intentionally empty and the app retries every minute. Tell staff on-site
+  // rather than claiming "Scanner Ready" when no scan could possibly match.
+  const catalogEmpty = !productsLoading && products.length === 0
 
   // Derive partner from machine code — no manual config needed
   // SF1 / SF2 → Steel Fab branding
@@ -54,9 +59,9 @@ export default function IdleScreen() {
 
       {/* Scanner status */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 28 }}>
-        <div className="scanner-dot" style={{ background: productsLoading ? 'var(--ember)' : undefined }} />
-        <span style={{ color: productsLoading ? 'var(--ember)' : 'var(--green)', fontSize: 14, fontWeight: 600, letterSpacing: '0.08em' }}>
-          {productsLoading ? 'Loading Inventory…' : 'Scanner Ready'}
+        <div className="scanner-dot" style={{ background: (productsLoading || catalogEmpty) ? 'var(--ember)' : undefined }} />
+        <span style={{ color: (productsLoading || catalogEmpty) ? 'var(--ember)' : 'var(--green)', fontSize: 14, fontWeight: 600, letterSpacing: '0.08em' }}>
+          {productsLoading ? 'Loading Inventory…' : catalogEmpty ? 'Inventory Syncing — One Moment…' : 'Scanner Ready'}
         </span>
       </div>
 

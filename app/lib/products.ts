@@ -1,8 +1,11 @@
 import type { Product } from '../types'
 
-// ─── Master product catalog ────────────────────────────────────────────────
-// Edit prices and availability in the Admin Panel.
-// In Phase 2 (Supabase) this will be fetched from the database.
+// ─── Demo product catalog (UNUSED on live kiosks) ──────────────────────────
+// The live catalog loads from Supabase (loadMachineProducts.ts). This list is
+// kept only as a reference/demo fixture — it is intentionally NOT used as a
+// runtime fallback: demo items don't exist in the DB, so a sale of one could
+// never be ingested by vending-dash. CATEGORIES / ACTIVE_CATEGORIES below ARE
+// used by the browse grid.
 
 export const PRODUCTS: Product[] = [
   // ── Energy Drinks ──

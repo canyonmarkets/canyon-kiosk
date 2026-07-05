@@ -24,18 +24,17 @@ export default function KioskPage() {
   const [mounted, setMounted] = useState(false)
   useEffect(() => { setMounted(true) }, [])
 
-  // Load real products from Supabase on init
+  // Load real products from Supabase on init.
+  // On failure/empty the catalog stays EMPTY (never a demo/placeholder list —
+  // demo items don't exist in the DB, so a live sale of one couldn't be
+  // ingested and the price could be wrong). The refresh effect below retries
+  // every minute while the catalog is empty, so a transient boot-time outage
+  // self-heals without a visit to the site.
   useEffect(() => {
     if (!mounted) return
     loadMarketProducts(config.machineId)
-      .then((products) => {
-        // setProducts also clears productsLoading; call with demo fallback if Supabase returns nothing
-        setProducts(products.length > 0 ? products : useKioskStore.getState().products)
-      })
-      .catch(() => {
-        // Network error on first boot — keep demo products, clear loading spinner
-        setProducts(useKioskStore.getState().products)
-      })
+      .then((products) => setProducts(products))
+      .catch(() => setProducts([]))  // network error on first boot — clear loading spinner, retry below
   }, [mounted])
 
   // Idle timer (fires when customer leaves cart without paying)
@@ -216,6 +215,13 @@ export default function KioskPage() {
 
     const interval = setInterval(refresh, 5 * 60 * 1000)
 
+    // Fast retry while the catalog is EMPTY (boot-time Supabase outage or a
+    // failed first load) — an empty storefront can't sell anything, so keep
+    // trying every minute until products appear. COOLDOWN still applies.
+    const emptyRetry = setInterval(() => {
+      if (useKioskStore.getState().products.length === 0) refresh()
+    }, 61 * 1000)
+
     // Fire on screen wake / tab visibility restored
     const onVisibility = () => { if (document.visibilityState === 'visible') refresh() }
     // Fire when EloView browser window regains focus
@@ -226,12 +232,17 @@ export default function KioskPage() {
 
     return () => {
       clearInterval(interval)
+      clearInterval(emptyRetry)
       document.removeEventListener('visibilitychange', onVisibility)
       window.removeEventListener('focus', onFocus)
     }
   }, [])
 
-  // ── Heartbeat: ping every 5 minutes ──────────────────────────────────────
+  // ── Heartbeat: ping every minute ─────────────────────────────────────────
+  // The dashboard (and the email alert function) flag a machine OFFLINE when
+  // last_seen is older than 5 minutes — so the ping interval must be well
+  // inside that window. A 5-min interval made healthy kiosks flap offline on
+  // any jitter or one throttled tick.
   useEffect(() => {
     const sendHeartbeat = async () => {
       // Write straight to Supabase. (The kiosk is a static export — `/api/heartbeat`
@@ -249,7 +260,7 @@ export default function KioskPage() {
       } catch { /* offline — heartbeat monitor will notice the gap */ }
     }
     sendHeartbeat()
-    const interval = setInterval(sendHeartbeat, 5 * 60 * 1000)
+    const interval = setInterval(sendHeartbeat, 60 * 1000)
     return () => clearInterval(interval)
   }, [config.machineId])
 

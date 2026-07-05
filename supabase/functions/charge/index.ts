@@ -62,10 +62,52 @@ Deno.serve(async (req) => {
       metadata: { referenceId, machineId: machineId ?? '' },
     })
 
-    // 2. Send the payment to the terminal reader
-    await stripe.terminal.readers.processPaymentIntent(STRIPE_READER_ID, {
-      payment_intent: pi.id,
+    // 2. Record the pending charge BEFORE arming the reader — a card must never
+    //    be chargeable without a row to track it. transaction_id holds the
+    //    Stripe PaymentIntent ID.
+    const { error: prErr } = await supabase.from('payment_results').insert({
+      reference_id: referenceId,
+      status: 'PENDING',
+      amount_cents: amountCents,
+      machine_id: machineId ?? null,
+      transaction_id: pi.id,
     })
+    if (prErr) {
+      await stripe.paymentIntents.cancel(pi.id).catch(() => {})
+      console.error('payment_results insert failed; charge aborted:', prErr)
+      return new Response(JSON.stringify({ error: 'Could not record payment; charge aborted' }), {
+        status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      })
+    }
+
+    // 3. Bridge: persist cart so vending-dash can ingest on confirmation.
+    //    Never let a bridge failure block the payment response.
+    if (Array.isArray(items) && items.length > 0) {
+      const { error: ksErr } = await supabase.from('kiosk_sales').insert({
+        id: referenceId,
+        machine_code: machineId ?? null,
+        items,
+        subtotal: subtotal ?? (amountCents / 100),
+        tax: tax ?? 0,
+        total: amountCents / 100,
+        status: 'PENDING',
+      })
+      if (ksErr) console.error('kiosk_sales insert failed (payment still proceeds):', ksErr)
+    }
+
+    // 4. Send the payment to the terminal reader. If presentment fails, mark
+    //    the rows CANCELED and cancel the PaymentIntent so the kiosk poller
+    //    sees a terminal state instead of waiting out its watchdog.
+    try {
+      await stripe.terminal.readers.processPaymentIntent(STRIPE_READER_ID, {
+        payment_intent: pi.id,
+      })
+    } catch (readerErr) {
+      await stripe.paymentIntents.cancel(pi.id).catch(() => {})
+      await supabase.from('payment_results').update({ status: 'CANCELED' }).eq('reference_id', referenceId)
+      await supabase.from('kiosk_sales').update({ status: 'CANCELED' }).eq('id', referenceId)
+      throw readerErr
+    }
 
     // In test mode, simulate a card tap so the payment auto-completes.
     // _testDecline=true simulates a declined card (for testing the cancel flow).
@@ -79,30 +121,6 @@ Deno.serve(async (req) => {
       } else {
         await stripe.testHelpers.terminal.readers.presentPaymentMethod(STRIPE_READER_ID)
       }
-    }
-
-    // 3. Record the pending charge — transaction_id holds the Stripe PaymentIntent ID
-    await supabase.from('payment_results').insert({
-      reference_id: referenceId,
-      status: 'PENDING',
-      amount_cents: amountCents,
-      machine_id: machineId ?? null,
-      transaction_id: pi.id,
-    })
-
-    // 4. Bridge: persist cart so vending-dash can ingest on confirmation.
-    //    Never let a bridge failure block the payment response.
-    if (Array.isArray(items) && items.length > 0) {
-      const { error: ksErr } = await supabase.from('kiosk_sales').insert({
-        id: referenceId,
-        machine_code: machineId ?? null,
-        items,
-        subtotal: subtotal ?? (amountCents / 100),
-        tax: tax ?? 0,
-        total: amountCents / 100,
-        status: 'PENDING',
-      })
-      if (ksErr) console.error('kiosk_sales insert failed (payment still proceeds):', ksErr)
     }
 
     return new Response(JSON.stringify({ referenceId, status: 'PENDING' }), {
