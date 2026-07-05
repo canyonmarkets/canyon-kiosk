@@ -225,6 +225,42 @@ html, body {
   animation: glow-breathe 6s ease-in-out infinite;
   pointer-events: none;
 }
+/* Scan CTA breathes gently to draw the eye */
+@keyframes scan-cta-pulse {
+  0%, 100% { opacity: 0.88; text-shadow: 0 0 0 rgba(255,255,255,0); }
+  50%      { opacity: 1;    text-shadow: 0 0 26px rgba(255,255,255,0.28); }
+}
+.scan-cta {
+  animation: scan-cta-pulse 3.2s ease-in-out infinite;
+}
+
+/* Ember beam sweeps down the barcode glyph, like a real scanner */
+@keyframes scan-beam {
+  0%   { top: 8%;  opacity: 0.2; }
+  12%  { opacity: 1; }
+  50%  { top: 80%; opacity: 1; }
+  88%  { opacity: 1; }
+  100% { top: 8%;  opacity: 0.2; }
+}
+.barcode-glyph {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  gap: 3px;
+  height: 40px;
+  padding: 0 2px;
+}
+.barcode-glyph .bar { background: #cbd5e1; border-radius: 1px; }
+.barcode-glyph .beam {
+  position: absolute;
+  left: -6px; right: -6px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--ember);
+  box-shadow: 0 0 10px 2px rgba(201, 75, 12, 0.8);
+  animation: scan-beam 2.6s ease-in-out infinite;
+}
+
 .brand-shimmer {
   background: linear-gradient(105deg,
     #b8bdc7 0%, #b8bdc7 38%,
