@@ -22,27 +22,34 @@ export default function IdleScreen() {
       // SF layout: flex-start so the SF logo fills the bottom naturally
       // Canyon layout: centered as before
       justifyContent: isSteelFab ? 'flex-start' : 'center',
-      paddingTop:    isSteelFab ? '5vh' : '24px',
+      paddingTop:    isSteelFab ? '3vh' : '24px',
       paddingBottom: '20px',
       background: 'var(--bg)',
       gap: 0,
     }}>
 
-      {/* Canyon logo */}
-      <Image
-        src="/Canyon_Logo-removebg-preview.png"
-        alt="Canyon Markets"
-        width={220}
-        height={220}
-        style={{ objectFit: 'contain', filter: 'drop-shadow(0 6px 18px rgba(0,0,0,0.7))', marginBottom: 10 }}
-        priority
-      />
+      {/* Canyon logo — hero-sized, breathing ember glow, gentle float */}
+      <div className="idle-logo-wrap" style={{ marginBottom: 6 }}>
+        <div className="idle-glow" />
+        <Image
+          src="/Canyon_Logo-removebg-preview.png"
+          alt="Canyon Markets"
+          width={420}
+          height={420}
+          style={{
+            objectFit: 'contain',
+            width: 'min(44vh, 36vw, 480px)',
+            height: 'auto',
+            filter: 'drop-shadow(0 8px 24px rgba(0,0,0,0.7))',
+          }}
+          priority
+        />
+      </div>
 
-      {/* Brand name */}
-      <div style={{
-        fontFamily: 'var(--font-brand)', fontSize: 44, letterSpacing: '0.14em',
-        color: '#fff', textTransform: 'uppercase', marginBottom: 8,
-        textShadow: '-1px -1px 0 rgba(255,255,255,0.15), 1px 1px 0 rgba(0,0,0,0.85), 3px 3px 10px rgba(0,0,0,0.4)',
+      {/* Brand name — metallic shimmer sweep */}
+      <div className="brand-shimmer" style={{
+        fontFamily: 'var(--font-brand)', fontSize: 40, letterSpacing: '0.14em',
+        textTransform: 'uppercase', marginBottom: 8,
       }}>
         Canyon Markets
       </div>

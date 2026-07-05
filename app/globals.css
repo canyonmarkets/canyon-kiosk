@@ -184,3 +184,56 @@ html, body {
   from { opacity: 0; transform: translateX(-50%) translateY(12px); }
   to   { opacity: 1; transform: translateX(-50%) translateY(0); }
 }
+
+/* ── Idle screen ambient animation ─────────────────────────────── */
+
+/* Logo drifts gently, like it's alive */
+@keyframes logo-float {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-10px); }
+}
+
+/* Ember glow behind the logo breathes in and out */
+@keyframes glow-breathe {
+  0%, 100% { opacity: 0.30; transform: scale(1); }
+  50%      { opacity: 0.65; transform: scale(1.12); }
+}
+
+/* Metallic sheen sweeps across the brand name, then rests */
+@keyframes brand-shimmer {
+  0%   { background-position: 200% center; }
+  45%  { background-position: -200% center; }
+  100% { background-position: -200% center; }
+}
+
+.idle-logo-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: logo-float 7s ease-in-out infinite;
+}
+.idle-glow {
+  position: absolute;
+  inset: -22%;
+  border-radius: 50%;
+  background: radial-gradient(circle,
+    rgba(201, 75, 12, 0.45) 0%,
+    rgba(201, 75, 12, 0.14) 42%,
+    transparent 70%);
+  filter: blur(18px);
+  animation: glow-breathe 6s ease-in-out infinite;
+  pointer-events: none;
+}
+.brand-shimmer {
+  background: linear-gradient(105deg,
+    #b8bdc7 0%, #b8bdc7 38%,
+    #ffffff 47%, #ffd9c2 50%, #ffffff 53%,
+    #b8bdc7 62%, #b8bdc7 100%);
+  background-size: 300% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: brand-shimmer 7s ease-in-out infinite;
+  filter: drop-shadow(2px 3px 6px rgba(0, 0, 0, 0.6));
+}

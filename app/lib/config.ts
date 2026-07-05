@@ -14,6 +14,20 @@ export const DEFAULT_CONFIG: MachineConfig = {
 
 export const CONFIG_STORAGE_KEY = 'canyon-kiosk-config'
 
+// Location display name by machine-code prefix. The ?machine= URL param is the
+// authoritative identity, so the location label must follow it too — otherwise
+// a CC kiosk shows the SF1 default "Steel Fab" (there is no on-device settings
+// editor anymore). Add a prefix here when a new site gets kiosks.
+const LOCATION_BY_PREFIX: Array<[prefix: string, location: string]> = [
+  ['SF', 'Steel Fab'],
+  ['CC', 'Call Center'],
+]
+
+function locationForMachine(machineId: string, fallback: string): string {
+  const hit = LOCATION_BY_PREFIX.find(([p]) => machineId.startsWith(p))
+  return hit ? hit[1] : fallback
+}
+
 export function loadConfig(): MachineConfig {
   if (typeof window === 'undefined') return DEFAULT_CONFIG
   try {
@@ -30,11 +44,14 @@ export function loadConfig(): MachineConfig {
     if (machineFromUrl || themeFromUrl) {
       return {
         ...base,
-        ...(machineFromUrl ? { machineId: machineFromUrl } : {}),
+        ...(machineFromUrl ? {
+          machineId: machineFromUrl,
+          locationName: locationForMachine(machineFromUrl, base.locationName),
+        } : {}),
         ...(themeFromUrl   ? { theme: themeFromUrl }       : {}),
       }
     }
-    return base
+    return { ...base, locationName: locationForMachine(base.machineId, base.locationName) }
   } catch {
     return DEFAULT_CONFIG
   }
