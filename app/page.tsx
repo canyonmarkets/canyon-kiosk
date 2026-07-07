@@ -261,8 +261,60 @@ export default function KioskPage() {
     }
     sendHeartbeat()
     const interval = setInterval(sendHeartbeat, 60 * 1000)
-    return () => clearInterval(interval)
+
+    // Belt-and-suspenders against Android/WebView timer throttling: when the screen
+    // sleeps or the app is backgrounded, setInterval can freeze and the ping stops —
+    // which flags the kiosk OFFLINE even though Wi-Fi is fine. Fire an immediate
+    // heartbeat whenever the page becomes visible or regains focus, so any wake
+    // re-checks in instantly. Mirrors the product-refresh wiring above.
+    const onVisibility = () => { if (document.visibilityState === 'visible') sendHeartbeat() }
+    const onFocus = () => sendHeartbeat()
+    document.addEventListener('visibilitychange', onVisibility)
+    window.addEventListener('focus', onFocus)
+
+    return () => {
+      clearInterval(interval)
+      document.removeEventListener('visibilitychange', onVisibility)
+      window.removeEventListener('focus', onFocus)
+    }
   }, [config.machineId])
+
+  // ── Screen wake lock: keep the tablet awake 24/7 ─────────────────────────
+  // Sleep is fatal here: once the screen turns off the page becomes `hidden`,
+  // which (a) releases any wake lock and (b) makes Chromium throttle/freeze the
+  // heartbeat interval above — so the kiosk silently reads OFFLINE even with
+  // Wi-Fi up, then the access point drops the now-idle client. This holds the
+  // screen on from inside the app as a backup to Fully Kiosk's "Keep Screen On".
+  // The OS auto-releases the lock whenever the page hides (screen off), so we
+  // re-acquire on every visibility restore.
+  useEffect(() => {
+    if (typeof navigator === 'undefined' || !('wakeLock' in navigator)) return
+
+    let sentinel: WakeLockSentinel | null = null
+    let cancelled = false
+
+    const acquire = async () => {
+      if (sentinel || document.visibilityState !== 'visible') return
+      try {
+        sentinel = await navigator.wakeLock.request('screen')
+        if (cancelled) { void sentinel.release(); sentinel = null; return }
+        // Fired when the OS releases it (screen off / page hidden) — clear our
+        // handle so the visibility listener re-acquires on the next wake.
+        sentinel.addEventListener('release', () => { sentinel = null })
+      } catch { /* insecure context, low battery, or OS denial — Fully's setting is the primary guard */ }
+    }
+
+    const onVisibility = () => { if (document.visibilityState === 'visible') acquire() }
+
+    acquire()
+    document.addEventListener('visibilitychange', onVisibility)
+
+    return () => {
+      cancelled = true
+      document.removeEventListener('visibilitychange', onVisibility)
+      if (sentinel) { void sentinel.release(); sentinel = null }
+    }
+  }, [])
 
   if (!mounted) return <div style={{ position: 'fixed', inset: 0, background: '#0a0a0a' }} />
 
