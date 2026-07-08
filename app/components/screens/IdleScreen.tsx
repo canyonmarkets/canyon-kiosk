@@ -12,8 +12,12 @@ export default function IdleScreen() {
 
   // Derive partner from machine code — no manual config needed
   // SF1 / SF2 → Steel Fab branding
+  // MB      → Mirabella at ASU branding
   // CC1 / CC2 → plain Canyon Markets (no partner logo)
-  const isSteelFab = config.machineId.toUpperCase().startsWith('SF')
+  const machineUpper = config.machineId.toUpperCase()
+  const isSteelFab  = machineUpper.startsWith('SF')
+  const isMirabella = machineUpper.startsWith('MB')
+  const hasPartner  = isSteelFab || isMirabella
 
   return (
     <div style={{
@@ -94,14 +98,14 @@ export default function IdleScreen() {
             background: 'transparent',
             border: '2px solid rgba(201,75,12,0.75)',
             color: '#e8956b',
-            marginBottom: isSteelFab ? 20 : 0,
+            marginBottom: hasPartner ? 20 : 0,
           }}
         >
           Browse Items
         </button>
 
-        {/* Steel Fab partner branding — SF1 / SF2 only */}
-        {isSteelFab && (
+        {/* Partner branding — SF1 / SF2 (Steel Fab) or MB (Mirabella at ASU) */}
+        {hasPartner && (
           <>
             {/* "IN PARTNERSHIP WITH" — same font/weight as Scan Item to Begin */}
             <div style={{
@@ -112,14 +116,36 @@ export default function IdleScreen() {
               In Partnership With
             </div>
 
-            {/* Steel Fab logo */}
-            <Image
-              src="/Steelfab logo.png"
-              alt="Steel Fab"
-              width={300}
-              height={76}
-              style={{ objectFit: 'contain', width: 300, height: 'auto', opacity: 0.92 }}
-            />
+            {isSteelFab && (
+              /* Steel Fab logo — light silver artwork sits directly on the dark splash */
+              <Image
+                src="/Steelfab logo.png"
+                alt="Steel Fab"
+                width={300}
+                height={76}
+                style={{ objectFit: 'contain', width: 300, height: 'auto', opacity: 0.92 }}
+              />
+            )}
+
+            {isMirabella && (
+              /* Mirabella logo — dark/colored brand artwork, so it rides a clean white
+                 plaque to stay legible and brand-accurate against the dark background */
+              <div style={{
+                background: '#ffffff',
+                borderRadius: 16,
+                padding: '16px 22px',
+                boxShadow: '0 8px 24px rgba(0,0,0,0.45)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}>
+                <Image
+                  src="/Mirabella logo.png"
+                  alt="Mirabella at ASU"
+                  width={1870}
+                  height={660}
+                  style={{ objectFit: 'contain', width: 268, height: 'auto', display: 'block' }}
+                />
+              </div>
+            )}
           </>
         )}
       </div>

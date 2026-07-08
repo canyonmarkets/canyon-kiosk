@@ -21,6 +21,7 @@ export const CONFIG_STORAGE_KEY = 'canyon-kiosk-config'
 const LOCATION_BY_PREFIX: Array<[prefix: string, location: string]> = [
   ['SF', 'Steel Fab'],
   ['CC', 'Call Center'],
+  ['MB', 'Mirabella at ASU'],
 ]
 
 function locationForMachine(machineId: string, fallback: string): string {
