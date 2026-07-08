@@ -128,23 +128,15 @@ export default function IdleScreen() {
             )}
 
             {isMirabella && (
-              /* Mirabella logo — dark/colored brand artwork, so it rides a clean white
-                 plaque to stay legible and brand-accurate against the dark background */
-              <div style={{
-                background: '#ffffff',
-                borderRadius: 16,
-                padding: '16px 22px',
-                boxShadow: '0 8px 24px rgba(0,0,0,0.45)',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-              }}>
-                <Image
-                  src="/Mirabella logo.png"
-                  alt="Mirabella at ASU"
-                  width={1870}
-                  height={660}
-                  style={{ objectFit: 'contain', width: 268, height: 'auto', display: 'block' }}
-                />
-              </div>
+              /* Mirabella logo — transparent PNG (whitespace trimmed to the artwork),
+                 placed directly on the dark splash like the Steel Fab mark */
+              <Image
+                src="/Mirabella logo.png"
+                alt="Mirabella at ASU"
+                width={1850}
+                height={306}
+                style={{ objectFit: 'contain', width: 320, height: 'auto' }}
+              />
             )}
           </>
         )}
