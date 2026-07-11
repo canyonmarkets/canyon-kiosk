@@ -238,6 +238,30 @@ export default function KioskPage() {
     }
   }, [])
 
+  // ── Instant catalog sync (dash "Sync Kiosks" button) ──────────────────────
+  // vending-dash broadcasts on the 'catalog-sync' Realtime channel when Jeff
+  // taps Sync Kiosks — the kiosk refetches immediately instead of waiting for
+  // the 5-min poll, then acks back with its machine code + item count so the
+  // dash can show a per-kiosk ✓. Same empty-catalog guard as the poll refresh:
+  // a failed/empty fetch never wipes a working catalog.
+  useEffect(() => {
+    const channel = supabase.channel('catalog-sync')
+    channel.on('broadcast', { event: 'sync' }, () => {
+      loadMarketProducts(config.machineId)
+        .then((products) => {
+          if (products.length > 0) setProducts(products)
+          channel.send({
+            type: 'broadcast',
+            event: 'synced',
+            payload: { machine: config.machineId, count: products.length },
+          })
+        })
+        .catch(() => { /* offline — dash shows "no reply", poll catches up later */ })
+    })
+    channel.subscribe()
+    return () => { supabase.removeChannel(channel) }
+  }, [])
+
   // ── Heartbeat: ping every minute ─────────────────────────────────────────
   // The dashboard (and the email alert function) flag a machine OFFLINE when
   // last_seen is older than 5 minutes — so the ping interval must be well
