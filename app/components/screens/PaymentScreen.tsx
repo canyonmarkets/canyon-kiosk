@@ -21,6 +21,10 @@ export default function PaymentScreen({ onApproved, isActive }: { onApproved: (t
   const pollRef    = useRef<ReturnType<typeof setInterval> | null>(null)
   const refIdRef   = useRef<string | null>(null)
   const approvedRef = useRef(false)  // guards handleApproved from double-firing
+  // (F12) Cart snapshot taken once at Pay time so the charged amount, the bridge
+  // (kiosk_sales) row, and the recorded transaction can never disagree even if a
+  // barcode scan mutates the live cart between Pay and render.
+  const snapshotRef = useRef<{ subtotal: number; tax: number; total: number; items: typeof cart } | null>(null)
   const [payStatus, setPayStatus] = useState<PayStatus>('idle')
   const [errorMsg,  setErrorMsg]  = useState<string | null>(null)
   const total = cartTotal()
@@ -30,6 +34,21 @@ export default function PaymentScreen({ onApproved, isActive }: { onApproved: (t
     if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null }
   }
 
+  // (F4/F5) Disarm the reader for a specific reference — best-effort, with one delayed
+  // retry to catch a reader the server armed just AFTER our first cancel (a client
+  // abort/timeout can race ahead of the server presenting the PaymentIntent). Safe to
+  // fire for a stale reference: charge-cancel (F6) only clears the reader when THAT
+  // reference's PaymentIntent is the one currently on it.
+  const cancelCharge = (ref: string) => {
+    const send = () => fetch(`${SUPABASE_URL}/functions/v1/charge-cancel`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${SUPABASE_ANON_KEY}` },
+      body: JSON.stringify({ referenceId: ref, machineId: config.machineId }),
+    }).catch(() => { /* best-effort */ })
+    send()
+    setTimeout(send, 3000)
+  }
+
   const handleApproved = () => {
     // Two slow overlapping status polls can both resolve PROCESSED and both
     // schedule this callback — the second run would record a phantom $0
@@ -37,16 +56,16 @@ export default function PaymentScreen({ onApproved, isActive }: { onApproved: (t
     if (approvedRef.current) return
     approvedRef.current = true
     stopPolling()
-    // Capture totals BEFORE clearing the cart — both the saved transaction and
-    // the thank-you screen need them, and clearCart() would zero them out.
-    // (Use the store's own subtotal/tax rather than reverse-deriving from the
-    // total, so the numbers are exact for the receipt / future kiosk_sales.)
-    const finalSubtotal = cartSubtotal()
-    const finalTax      = cartTax()
-    const finalTotal    = cartTotal()
+    // (F12) Prefer the Pay-time snapshot so the receipt / recorded transaction match
+    // exactly what was charged. Fall back to the live cart only if a snapshot is
+    // somehow absent. clearCart() below would otherwise zero these out.
+    const snap = snapshotRef.current
+    const finalSubtotal = snap?.subtotal ?? cartSubtotal()
+    const finalTax      = snap?.tax ?? cartTax()
+    const finalTotal    = snap?.total ?? cartTotal()
     const tx = {
       id: refIdRef.current ?? `tx_${Date.now()}`,
-      items: [...cart],
+      items: snap ? [...snap.items] : [...cart],
       subtotal: finalSubtotal,
       tax: finalTax,
       total: finalTotal,
@@ -61,18 +80,25 @@ export default function PaymentScreen({ onApproved, isActive }: { onApproved: (t
   const startPayment = async () => {
     stopPolling()               // clear any stale timers (error auto-return, prior attempt)
     approvedRef.current = false
-    const amountCents = Math.round(total * 100)
+    // (F12) Snapshot the cart ONCE at Pay time. Everything downstream — amountCents,
+    // the kiosk_sales bridge row, and handleApproved's recorded transaction — derives
+    // from this snapshot so a late scan can't desync the charge from the record.
+    const snapSubtotal = cartSubtotal()
+    const snapTax = cartTax()
+    const snapTotal = cartTotal()
+    const items = cart.map((i) => ({
+      productId: i.product.id, name: i.product.name, qty: i.qty, unitPrice: i.product.price,
+    }))
+    snapshotRef.current = { subtotal: snapSubtotal, tax: snapTax, total: snapTotal, items: [...cart] }
+    const amountCents = Math.round(snapTotal * 100)
     const referenceId = `${config.machineId}-${Date.now()}`
     refIdRef.current = referenceId
     setPayStatus('sending')
     setErrorMsg(null)
     // Send the cart so the `charge` fn can persist a kiosk_sales row at charge time
     // (the bridge into vending-dash). subtotal is PRE-TAX — the revenue figure.
-    const items = cart.map((i) => ({
-      productId: i.product.id, name: i.product.name, qty: i.qty, unitPrice: i.product.price,
-    }))
-    const subtotal = cartSubtotal()
-    const tax = cartTax()
+    const subtotal = snapSubtotal
+    const tax = snapTax
 
     try {
       // Abort a hung request — on a flaky network a fetch can stall for minutes,
@@ -99,20 +125,22 @@ export default function PaymentScreen({ onApproved, isActive }: { onApproved: (t
         throw new Error(err.error ?? 'Charge request failed')
       }
 
+      // (F2) If a cancel/timeout/unmount happened while the charge request was in
+      // flight, refIdRef was cleared or replaced — bail instead of re-arming timers
+      // and a poll for a session the customer already abandoned (which previously left
+      // a "ghost" reader armed and could record against a later cart).
+      if (refIdRef.current !== referenceId) return
+
       setPayStatus('waiting')
 
-      // Timeout — if terminal never responds. Also cancel the reader action so the
+      // Timeout — if terminal never responds. Disarm the reader (with retry) so the
       // terminal clears and a late tap can't charge the next customer / leave the
       // reader busy. Mirrors the "Cancel & Return to Cart" button below.
       timerRef.current = setTimeout(() => {
         stopPolling()
-        if (refIdRef.current) {
-          fetch(`${SUPABASE_URL}/functions/v1/charge-cancel`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${SUPABASE_ANON_KEY}` },
-            body: JSON.stringify({ referenceId: refIdRef.current, machineId: config.machineId }),
-          }).catch(() => { /* non-fatal — reader times out on its own */ })
-        }
+        const ref = refIdRef.current
+        refIdRef.current = null       // (F2) let any in-flight continuation bail
+        if (ref) cancelCharge(ref)    // (F4/F5) disarm reader, best-effort + retry
         setPayStatus('timeout')
         // Track the return-to-cart nav in timerRef so stopPolling() (cancel button,
         // screen change, a new payment attempt) clears it — a stale navigation
@@ -128,6 +156,9 @@ export default function PaymentScreen({ onApproved, isActive }: { onApproved: (t
             { headers: { 'Authorization': `Bearer ${SUPABASE_ANON_KEY}` } }
           )
           const { status } = await statusRes.json()
+          // (F2) Bail if this payment was canceled/superseded while the poll was in
+          // flight — never act on a result for a session that no longer owns the screen.
+          if (refIdRef.current !== referenceId) { stopPolling(); return }
           if (status === 'PROCESSED') {
             // Stop timers NOW — otherwise the 90s timeout (or a second slow poll)
             // could still fire during the 800ms approval pause and cancel/dupe an
@@ -153,6 +184,11 @@ export default function PaymentScreen({ onApproved, isActive }: { onApproved: (t
       // to a customer at the terminal.
       console.error('[payment] charge failed:', err)
       stopPolling()
+      // (F4) The charge fn runs server-side even if our fetch aborted (20s connect
+      // timeout) — it may arm the reader AFTER we bail here. Disarm the reference (with
+      // retry) so a late tap can't charge a walked-away customer or leave the reader
+      // busy for the next one. Retry then mints a fresh reference on a cleared reader.
+      if (refIdRef.current) cancelCharge(refIdRef.current)
       setPayStatus('error')
       setErrorMsg('We couldn’t start the payment. Please try again, or ask a team member for help.')
       // Self-recover: if nobody taps Retry/Cancel (customer walked away), return
@@ -169,6 +205,7 @@ export default function PaymentScreen({ onApproved, isActive }: { onApproved: (t
       setErrorMsg(null)
       refIdRef.current = null
       approvedRef.current = false
+      snapshotRef.current = null
       return
     }
     startPayment()
@@ -273,21 +310,20 @@ export default function PaymentScreen({ onApproved, isActive }: { onApproved: (t
         </button>
       )}
 
-      <button className="btn-outline" onClick={async () => {
-        stopPolling()
-        if (refIdRef.current) {
-          try {
-            await fetch(`${SUPABASE_URL}/functions/v1/charge-cancel`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${SUPABASE_ANON_KEY}` },
-              body: JSON.stringify({ referenceId: refIdRef.current, machineId: config.machineId }),
-            })
-          } catch { /* non-fatal — reader will time out on its own */ }
-        }
-        setScreen('cart')
-      }} style={{ marginTop: 4, padding: '14px 44px', fontSize: 18 }}>
-        ← Cancel &amp; Return to Cart
-      </button>
+      {/* (F3) Hide Cancel once approved — a tap during the 800ms approval pause would
+          otherwise clear the pending handleApproved and strand a paid-for cart, inviting
+          a double charge. There is nothing to cancel after approval anyway. */}
+      {payStatus !== 'approved' && (
+        <button className="btn-outline" onClick={() => {
+          stopPolling()
+          const ref = refIdRef.current
+          refIdRef.current = null       // (F2) so any in-flight charge continuation bails
+          if (ref) cancelCharge(ref)    // (F4/F5) disarm the reader, best-effort + retry
+          setScreen('cart')
+        }} style={{ marginTop: 4, padding: '14px 44px', fontSize: 18 }}>
+          ← Cancel &amp; Return to Cart
+        </button>
+      )}
     </div>
   )
 }
