@@ -33,12 +33,20 @@ Deno.serve(async (req) => {
       const pi = event.data.object as Stripe.PaymentIntent
       const referenceId = pi.metadata?.referenceId
       if (referenceId) {
-        await supabase.from('payment_results')
-          .update({ status: 'PROCESSED', updated_at: new Date().toISOString() })
+        const nowIso = new Date().toISOString()
+        const r1 = await supabase.from('payment_results')
+          .update({ status: 'PROCESSED', updated_at: nowIso })
           .eq('reference_id', referenceId)
-        await supabase.from('kiosk_sales')
-          .update({ status: 'PROCESSED', completed_at: new Date().toISOString() })
+        const r2 = await supabase.from('kiosk_sales')
+          .update({ status: 'PROCESSED', completed_at: nowIso })
           .eq('id', referenceId)
+        // (F8) If either write fails, THROW so the catch returns 500 and Stripe retries.
+        // The updates are idempotent status writes, so a retry only re-applies the same
+        // terminal state — losing a PROCESSED transition (money captured, sale not recorded)
+        // is far worse than a duplicate delivery.
+        if (r1.error || r2.error) {
+          throw new Error(`PROCESSED write failed: ${r1.error?.message ?? ''} ${r2.error?.message ?? ''}`)
+        }
       }
 
     } else if (event.type === 'payment_intent.payment_failed') {
@@ -81,8 +89,11 @@ Deno.serve(async (req) => {
 
   } catch (err) {
     console.error('webhook processing error:', err)
-    // Return 200 even on processing errors — Stripe retries on non-2xx and we
-    // don't want duplicate events if the issue is in our DB write, not the event.
+    // (F8) Return 500 so Stripe RETRIES. Our status writes are idempotent (same-value
+    // terminal-state writes), so a retry can only re-apply the same result — whereas the
+    // old 200-on-error swallowed a transient DB failure and permanently lost the
+    // PROCESSED/CANCELED transition after the kiosk had already stopped polling.
+    return new Response(`processing error: ${err}`, { status: 500 })
   }
 
   return new Response('ok', { status: 200 })

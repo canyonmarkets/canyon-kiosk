@@ -24,51 +24,87 @@ Deno.serve(async (req) => {
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY)
     const stripe   = new Stripe(STRIPE_SECRET_KEY)
 
-    // Look up the reader for this machine
-    const { data: machine } = await supabase
-      .from('machines')
-      .select('stripe_reader_id')
-      .eq('code', machineId ?? '')
-      .maybeSingle()
-
-    // Cancel the reader action so the terminal clears immediately
-    if (machine?.stripe_reader_id) {
-      try {
-        await stripe.terminal.readers.cancelAction(machine.stripe_reader_id)
-      } catch (e) {
-        // Reader may have already cleared (timed out, card removed) — not fatal
-        console.warn('cancelAction skipped:', e)
-      }
-    }
-
-    // Cancel the PaymentIntent if one exists for this reference
+    // Look up THIS reference's payment row FIRST so every action below can be scoped
+    // to it — a cancel must never touch a different customer's in-flight payment.
     const { data: row } = await supabase
       .from('payment_results')
       .select('transaction_id, status')
       .eq('reference_id', referenceId)
       .maybeSingle()
 
-    if (row?.transaction_id && row.status === 'PENDING') {
+    const { data: machine } = await supabase
+      .from('machines')
+      .select('stripe_reader_id')
+      .eq('code', machineId ?? '')
+      .maybeSingle()
+
+    // (F6) Clear the reader ONLY if the action currently on it belongs to THIS
+    // reference. Previously cancelAction fired unconditionally, so a stale/delayed
+    // cancel — or a forged request with just a machineId — wiped whatever payment
+    // the NEXT customer had already armed. Scope it to our own PaymentIntent.
+    if (machine?.stripe_reader_id && row?.transaction_id) {
       try {
-        await stripe.paymentIntents.cancel(row.transaction_id)
+        const reader = await stripe.terminal.readers.retrieve(machine.stripe_reader_id)
+        // deno-lint-ignore no-explicit-any
+        const action = reader.action as any
+        const onReaderPi = action?.process_payment_intent?.payment_intent
+        if (onReaderPi === row.transaction_id) {
+          await stripe.terminal.readers.cancelAction(machine.stripe_reader_id)
+        }
       } catch (e) {
-        console.warn('PaymentIntent cancel skipped:', e)
+        console.warn('reader cancel skipped:', e)
       }
-      await supabase
-        .from('payment_results')
-        .update({ status: 'CANCELED' })
-        .eq('reference_id', referenceId)
     }
 
-    // Also flip the bridge row so it is not left dangling as PENDING forever.
-    // (Only ever touches our own still-pending row; PROCESSED rows are untouched.)
-    await supabase
-      .from('kiosk_sales')
-      .update({ status: 'CANCELED', completed_at: null })
-      .eq('id', referenceId)
-      .eq('status', 'PENDING')
+    // Resolve the PaymentIntent. Only act while our row is still PENDING.
+    if (row?.transaction_id && row.status === 'PENDING') {
+      let piSucceeded = false
+      try {
+        const canceled = await stripe.paymentIntents.cancel(row.transaction_id)
+        piSucceeded = canceled.status === 'succeeded' // normally 'canceled'; belt-and-braces
+      } catch (_e) {
+        // (F1) cancel() THROWS when the PI already SUCCEEDED — the exact race where the
+        // card was tapped at ~89s just as the 90s timeout fired the cancel. Do NOT blindly
+        // mark CANCELED (that erases a captured sale and invites a double charge). Retrieve
+        // the PI and find out what really happened.
+        try {
+          const pi = await stripe.paymentIntents.retrieve(row.transaction_id)
+          piSucceeded = pi.status === 'succeeded'
+        } catch (e2) {
+          console.warn('PI retrieve after failed cancel:', e2)
+        }
+      }
 
-    return new Response(JSON.stringify({ ok: true }), {
+      if (piSucceeded) {
+        // (F1) Money WAS captured — record PROCESSED (guarded), never CANCELED, and tell
+        // the client so it shows approval instead of a false timeout.
+        const nowIso = new Date().toISOString()
+        await supabase.from('payment_results')
+          .update({ status: 'PROCESSED', updated_at: nowIso })
+          .eq('reference_id', referenceId)
+          .eq('status', 'PENDING')
+        await supabase.from('kiosk_sales')
+          .update({ status: 'PROCESSED', completed_at: nowIso })
+          .eq('id', referenceId)
+          .eq('status', 'PENDING')
+        return new Response(JSON.stringify({ ok: true, status: 'PROCESSED' }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        })
+      }
+
+      // Genuinely canceled — flip both rows, each guarded with .eq('status','PENDING')
+      // (F1) so a concurrent webhook PROCESSED write can never be clobbered back to CANCELED.
+      await supabase.from('payment_results')
+        .update({ status: 'CANCELED' })
+        .eq('reference_id', referenceId)
+        .eq('status', 'PENDING')
+      await supabase.from('kiosk_sales')
+        .update({ status: 'CANCELED', completed_at: null })
+        .eq('id', referenceId)
+        .eq('status', 'PENDING')
+    }
+
+    return new Response(JSON.stringify({ ok: true, status: row?.status ?? 'UNKNOWN' }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' }
     })
 

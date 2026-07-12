@@ -83,7 +83,7 @@ Deno.serve(async (req) => {
     // 3. Bridge: persist cart so vending-dash can ingest on confirmation.
     //    Never let a bridge failure block the payment response.
     if (Array.isArray(items) && items.length > 0) {
-      const { error: ksErr } = await supabase.from('kiosk_sales').insert({
+      const ksRow = {
         id: referenceId,
         machine_code: machineId ?? null,
         items,
@@ -91,8 +91,15 @@ Deno.serve(async (req) => {
         tax: tax ?? 0,
         total: amountCents / 100,
         status: 'PENDING',
-      })
-      if (ksErr) console.error('kiosk_sales insert failed (payment still proceeds):', ksErr)
+      }
+      const { error: ksErr } = await supabase.from('kiosk_sales').insert(ksRow)
+      if (ksErr) {
+        // (F10) Retry once. A dropped kiosk_sales row means a charge with no sale
+        // record — the dashboard silently under-reports revenue and never decrements
+        // that inventory. Still never block the payment response on a bridge failure.
+        const { error: ksErr2 } = await supabase.from('kiosk_sales').insert(ksRow)
+        if (ksErr2) console.error('kiosk_sales insert failed after retry (payment still proceeds):', ksErr2)
+      }
     }
 
     // 4. Send the payment to the terminal reader. If presentment fails, mark
