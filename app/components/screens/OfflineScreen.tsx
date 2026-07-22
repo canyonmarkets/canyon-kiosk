@@ -7,6 +7,10 @@ import { useKioskStore } from '../../lib/store'
 // or the on-screen countdown drifts from the real retry loop.
 const RETRY_SECONDS = 61
 
+// Google Voice line shown on the offline screen (never a personal cell — this
+// screen is public). Empty string hides the text-us line entirely.
+const SUPPORT_TEXT_NUMBER = '(602) 935-6830'
+
 const SUPABASE_HOST = (() => {
   try { return new URL(process.env.NEXT_PUBLIC_SUPABASE_URL ?? '').hostname } catch { return 'supabase' }
 })()
@@ -89,8 +93,8 @@ export default function OfflineScreen() {
       </div>
 
       {/* Headline */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 18, marginBottom: 12 }}>
-        <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#e8956b"
+      <div style={{ display: 'flex', alignItems: 'center', gap: 20, marginBottom: 14 }}>
+        <svg width="46" height="46" viewBox="0 0 24 24" fill="none" stroke="#e8956b"
           strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
           <line x1="1" y1="1" x2="23" y2="23" />
           <path d="M16.72 11.06A10.94 10.94 0 0 1 19 12.55" />
@@ -100,15 +104,15 @@ export default function OfflineScreen() {
           <path d="M8.53 16.11a6 6 0 0 1 6.95 0" />
           <line x1="12" y1="20" x2="12.01" y2="20" />
         </svg>
-        <div style={{ fontSize: 34, fontWeight: 400, letterSpacing: '0.14em', textTransform: 'uppercase', color: '#ffffff' }}>
+        <div style={{ fontSize: 46, fontWeight: 400, letterSpacing: '0.14em', textTransform: 'uppercase', color: '#ffffff' }}>
           Temporarily Offline
         </div>
       </div>
 
       {/* Friendly customer-facing copy */}
       <div style={{
-        fontSize: 17, color: 'var(--text-muted)', maxWidth: 560, textAlign: 'center',
-        lineHeight: 1.55, marginBottom: 22,
+        fontSize: 22, color: 'var(--text-muted)', maxWidth: 720, textAlign: 'center',
+        lineHeight: 1.55, marginBottom: 24,
       }}>
         This market can&apos;t reach the network right now. Your snacks aren&apos;t going
         anywhere — check back in a few minutes.
@@ -116,21 +120,32 @@ export default function OfflineScreen() {
 
       {/* Auto-retry status pill */}
       <div style={{
-        display: 'flex', alignItems: 'center', gap: 12,
+        display: 'flex', alignItems: 'center', gap: 14,
         border: '1px solid rgba(239,159,39,0.45)', borderRadius: 60,
-        padding: '11px 24px', marginBottom: 14,
+        padding: '14px 30px', marginBottom: 16,
       }}>
         <div className="offline-dot" />
-        <span style={{ fontSize: 15, letterSpacing: '0.06em', color: '#EF9F27', fontWeight: 600 }}>
+        <span style={{ fontSize: 19, letterSpacing: '0.06em', color: '#EF9F27', fontWeight: 600 }}>
           {browserOffline
             ? 'Waiting for network — will reconnect automatically'
             : <>Reconnecting automatically&nbsp;&nbsp;·&nbsp;&nbsp;attempt {offline.attempts}&nbsp;&nbsp;·&nbsp;&nbsp;{countdown}</>}
         </span>
       </div>
 
-      <div style={{ fontSize: 13, color: 'var(--text-dim)', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 20 }}>
+      <div style={{ fontSize: 16, color: 'var(--text-dim)', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 10 }}>
         Offline since {sinceStr} · {agoStr}
       </div>
+
+      {/* True — kiosk-heartbeat-alert emails within ~7 min of silence. Calms
+          customers and reduces the urge to hunt down a personal number. */}
+      <div style={{ fontSize: 18, color: 'var(--text-muted)', marginBottom: SUPPORT_TEXT_NUMBER ? 8 : 22 }}>
+        Our team has been notified automatically.
+      </div>
+      {SUPPORT_TEXT_NUMBER && (
+        <div style={{ fontSize: 18, color: 'var(--text-muted)', marginBottom: 22 }}>
+          Still down after 15 minutes? Text us: <span style={{ color: '#e8956b', fontWeight: 600, fontSize: 19 }}>{SUPPORT_TEXT_NUMBER}</span>
+        </div>
+      )}
 
       {/* Partner branding — same block as IdleScreen */}
       {hasPartner && (
@@ -173,12 +188,12 @@ export default function OfflineScreen() {
         }}
       >
         <span style={{
-          fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 12,
+          fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 13,
           color: 'var(--text-dim)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
         }}>
           {config.machineId} · {config.locationName} · {SUPABASE_HOST} unreachable · {offline.lastError}
         </span>
-        <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 12, color: 'var(--text-dim)', whiteSpace: 'nowrap' }}>
+        <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 13, color: 'var(--text-dim)', whiteSpace: 'nowrap' }}>
           tap 5× for details
         </span>
       </div>
