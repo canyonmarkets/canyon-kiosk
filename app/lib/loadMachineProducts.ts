@@ -19,6 +19,12 @@ const typeToCategory: Record<string, Category> = {
 // Product assignments are managed via Store Inventory → checkboxes in vending-dash,
 // stored in app_config['machineProductIds'] keyed by machine DB id (e.g. 'm1').
 // The kiosk config stores the machine CODE (e.g. 'SF1'), so we look up the DB id first.
+//
+// Error contract: connection-level failures THROW (callers mark the kiosk
+// offline and show the offline screen); a successful round-trip that finds no
+// assignments still resolves to [] (legitimately empty storefront). Before the
+// 2026-07-22 Steel Fab outage both cases returned [], so a dead network was
+// indistinguishable from an unconfigured machine.
 export async function loadMarketProducts(machineCode: string): Promise<Product[]> {
   try {
     // ── Step 1: resolve machine code → database id ───────────────────────
@@ -43,10 +49,12 @@ export async function loadMarketProducts(machineCode: string): Promise<Product[]
     // gets scanned. Nothing is ever removed from the kiosk for availability.
     let productIds: string[] | null = null
 
-    const { data: configRows } = await supabase
+    const { data: configRows, error: configErr } = await supabase
       .from('app_config')
       .select('key, value')
       .eq('key', 'machineProductIds')
+
+    if (configErr) throw new Error(`app_config: ${configErr.message}`)
 
     const cfg = (k: string) => configRows?.find((r: { key: string; value: unknown }) => r.key === k)?.value
     const pick = <T,>(m: Record<string, T> | undefined): T | undefined => m?.[machineDbId] ?? m?.[machineCode]
@@ -71,8 +79,9 @@ export async function loadMarketProducts(machineCode: string): Promise<Product[]
       .eq('status', 'Active')
       .in('id', productIds)
 
-    if (error || !data?.length) {
-      console.warn('[kiosk] Failed to load products', error)
+    if (error) throw new Error(`products: ${error.message}`)
+    if (!data?.length) {
+      console.warn('[kiosk] Product query returned no rows for', machineCode)
       return []
     }
 
@@ -94,6 +103,6 @@ export async function loadMarketProducts(machineCode: string): Promise<Product[]
       }))
   } catch (err) {
     console.warn('[kiosk] Supabase connection error', err)
-    return []
+    throw err
   }
 }

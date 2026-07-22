@@ -7,6 +7,16 @@ import { loadConfig, saveConfig, CONFIG_STORAGE_KEY } from './config'
 // kids mashing the button) from building an absurd charge.
 const MAX_QTY_PER_ITEM = 99
 
+// Network-outage state driving the full-screen offline display. `since` is the
+// first failure of the current outage (survives across retries); each failed
+// retry bumps attempts/lastAttemptAt so the screen's countdown stays honest.
+export interface OfflineState {
+  since: number
+  attempts: number
+  lastAttemptAt: number
+  lastError: string
+}
+
 interface KioskStore {
   // Screen
   screen: Screen
@@ -39,6 +49,13 @@ interface KioskStore {
   // Config
   config: MachineConfig
   updateConfig: (config: MachineConfig) => void
+
+  // Network outage tracking (drives OfflineScreen)
+  offline: OfflineState | null
+  browserOffline: boolean
+  reportNetFailure: (msg: string) => void
+  clearNetFailure: () => void
+  setBrowserOffline: (down: boolean) => void
 }
 
 export const useKioskStore = create<KioskStore>()((set, get) => ({
@@ -94,4 +111,17 @@ export const useKioskStore = create<KioskStore>()((set, get) => ({
     saveConfig(config)
     set({ config })
   },
+
+  offline: null,
+  browserOffline: false,
+  reportNetFailure: (msg) => set((s) => ({
+    offline: {
+      since: s.offline?.since ?? Date.now(),
+      attempts: (s.offline?.attempts ?? 0) + 1,
+      lastAttemptAt: Date.now(),
+      lastError: msg,
+    },
+  })),
+  clearNetFailure: () => set({ offline: null }),
+  setBrowserOffline: (browserOffline) => set({ browserOffline }),
 }))

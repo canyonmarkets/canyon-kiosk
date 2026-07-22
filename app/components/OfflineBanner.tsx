@@ -1,8 +1,10 @@
 'use client'
 import { useEffect, useState } from 'react'
+import { useKioskStore } from '../lib/store'
 
 export default function OfflineBanner() {
   const [offline, setOffline] = useState(false)
+  const screen = useKioskStore((s) => s.screen)
 
   useEffect(() => {
     const onOnline  = () => setOffline(false)
@@ -14,6 +16,9 @@ export default function OfflineBanner() {
   }, [])
 
   if (!offline) return null
+  // On idle the full-screen OfflineScreen owns this state — the banner would
+  // just stack on top of it. Mid-transaction screens still get the banner.
+  if (screen === 'idle') return null
 
   return (
     <div style={{

@@ -4,6 +4,7 @@ import { useKioskStore } from './lib/store'
 import { loadMarketProducts } from './lib/loadMachineProducts'
 import { supabase } from './lib/supabase'
 import IdleScreen      from './components/screens/IdleScreen'
+import OfflineScreen   from './components/screens/OfflineScreen'
 import BrowseScreen    from './components/screens/BrowseScreen'
 import ProductsScreen  from './components/screens/ProductsScreen'
 import CartScreen      from './components/screens/CartScreen'
@@ -15,8 +16,15 @@ import AdminPanel      from './components/AdminPanel'
 
 const CART_IDLE_SECONDS = 20  // 20 seconds — fast turnover for high-traffic sites
 
+const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e))
+
 export default function KioskPage() {
-  const { screen, setScreen, clearCart, cart, config, setProducts, productsLoading } = useKioskStore()
+  const { screen, setScreen, clearCart, cart, config, setProducts, productsLoading, products, offline, browserOffline } = useKioskStore()
+
+  // ?offline=1 forces the offline state — for testing the offline screen on a
+  // dev box or a live kiosk without actually cutting its network.
+  const [simOffline] = useState(() =>
+    typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('offline'))
 
   // Prevent React hydration mismatch: the SSR pre-build uses the default machineId
   // ('SF1') but every other machine reads a different URL param on the client.
@@ -32,9 +40,19 @@ export default function KioskPage() {
   // self-heals without a visit to the site.
   useEffect(() => {
     if (!mounted) return
+    if (simOffline) {
+      setProducts([])
+      useKioskStore.getState().reportNetFailure('simulated outage (?offline=1)')
+      return
+    }
     loadMarketProducts(config.machineId)
-      .then((products) => setProducts(products))
-      .catch(() => setProducts([]))  // network error on first boot — clear loading spinner, retry below
+      .then((products) => { setProducts(products); useKioskStore.getState().clearNetFailure() })
+      .catch((err) => {
+        // network error on first boot — clear loading spinner; the empty-catalog
+        // retry below keeps trying and the offline screen shows meanwhile
+        setProducts([])
+        useKioskStore.getState().reportNetFailure(errMsg(err))
+      })
   }, [mounted])
 
   // Idle timer (fires when customer leaves cart without paying)
@@ -208,12 +226,39 @@ export default function KioskPage() {
       const now = Date.now()
       if (now - lastRefresh < COOLDOWN) return
       lastRefresh = now
+      if (simOffline) {
+        useKioskStore.getState().reportNetFailure('simulated outage (?offline=1)')
+        return
+      }
       loadMarketProducts(config.machineId)
-        .then((products) => { if (products.length > 0) setProducts(products) })
-        .catch(() => { /* offline — keep current catalog */ })
+        .then((products) => {
+          if (products.length > 0) setProducts(products)
+          useKioskStore.getState().clearNetFailure()
+        })
+        .catch((err) => {
+          // offline — keep current catalog; track the failure so the offline
+          // screen (empty catalog) or banner (loaded catalog) can show
+          useKioskStore.getState().reportNetFailure(errMsg(err))
+        })
     }
 
     const interval = setInterval(refresh, 5 * 60 * 1000)
+
+    // Browser-level connectivity signals: 'offline' fires the instant Wi-Fi
+    // drops (faster + more certain than waiting for a fetch to fail); 'online'
+    // triggers an immediate verify-fetch instead of waiting out the poll.
+    const onBrowserOffline = () => {
+      useKioskStore.getState().setBrowserOffline(true)
+      useKioskStore.getState().reportNetFailure('device reports no network connection')
+    }
+    const onBrowserOnline = () => {
+      useKioskStore.getState().setBrowserOffline(false)
+      lastRefresh = 0
+      refresh()
+    }
+    window.addEventListener('offline', onBrowserOffline)
+    window.addEventListener('online', onBrowserOnline)
+    if (typeof navigator !== 'undefined' && !navigator.onLine) onBrowserOffline()
 
     // Fast retry while the catalog is EMPTY (boot-time Supabase outage or a
     // failed first load) — an empty storefront can't sell anything, so keep
@@ -235,6 +280,8 @@ export default function KioskPage() {
       clearInterval(emptyRetry)
       document.removeEventListener('visibilitychange', onVisibility)
       window.removeEventListener('focus', onFocus)
+      window.removeEventListener('offline', onBrowserOffline)
+      window.removeEventListener('online', onBrowserOnline)
     }
   }, [])
 
@@ -352,11 +399,17 @@ export default function KioskPage() {
       {/* All screens — active class controls visibility */}
       <div style={{ position: 'absolute', inset: 0 }}>
 
-        {/* Idle */}
+        {/* Idle — replaced by the offline screen when the kiosk can't operate:
+            either the catalog never loaded (Supabase unreachable at boot, the
+            2026-07-22 Steel Fab failure mode) or the device itself reports no
+            network (can't charge cards). A loaded catalog with a transient
+            fetch blip keeps the normal idle screen — the kiosk can still sell. */}
         <div className={`kiosk-screen${screen === 'idle' ? ' active' : ''}`} style={{ alignItems: 'center', justifyContent: 'center', gap: 0, padding: '24px 0 20px' }}>
           {/* Invisible tap zone on logo for admin access */}
           <div style={{ position: 'absolute', top: 0, left: 0, width: 120, height: 120, zIndex: 10, cursor: 'default' }} onClick={handleLogoTap} />
-          <IdleScreen />
+          {offline && (products.length === 0 || browserOffline)
+            ? <OfflineScreen />
+            : <IdleScreen />}
         </div>
 
         <div className={`kiosk-screen${screen === 'browse' ? ' active' : ''}`}>
