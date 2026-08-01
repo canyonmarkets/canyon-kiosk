@@ -341,13 +341,22 @@ export default function KioskPage() {
   // Fully, and the Wi-Fi connection stay untouched. Fires only on the idle
   // screen with an empty cart, so a customer can never be interrupted; a busy
   // kiosk just retries a minute later.
+  //
+  // Primary schedule: nightly during the 2–4 AM tablet-local window (Steel
+  // Fab's only dark window — 24hr shifts elsewhere in the day). Fallback: any
+  // time uptime passes 20h, in case the window was missed (kiosk busy, clock
+  // wrong). Uptime >60 min inside the window prevents a reload loop.
   useEffect(() => {
-    const MAX_UPTIME_MIN = 12 * 60
+    const FALLBACK_UPTIME_MIN = 20 * 60
     const iv = setInterval(() => {
       const { screen: cur, cart: curCart } = useKioskStore.getState()
       if (cur !== 'idle' || curCart.length > 0) return
-      if (uptimeMinutes() < MAX_UPTIME_MIN) return
-      logEvent(config.machineId, 'self_reload', `scheduled heap flush at uptime ${uptimeMinutes()} min`)
+      const hour = new Date().getHours()
+      const inNightWindow = hour >= 2 && hour < 4
+      const due = inNightWindow ? uptimeMinutes() >= 60 : uptimeMinutes() >= FALLBACK_UPTIME_MIN
+      if (!due) return
+      logEvent(config.machineId, 'self_reload',
+        `${inNightWindow ? 'nightly' : 'fallback'} heap flush at uptime ${uptimeMinutes()} min`)
       setTimeout(() => window.location.reload(), 1500)
     }, 60 * 1000)
     return () => clearInterval(iv)
