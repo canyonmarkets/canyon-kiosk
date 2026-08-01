@@ -3,6 +3,7 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 import { useKioskStore } from './lib/store'
 import { loadMarketProducts } from './lib/loadMachineProducts'
 import { supabase } from './lib/supabase'
+import { initTelemetry, logEvent, memorySnapshot, uptimeMinutes } from './lib/telemetry'
 import IdleScreen      from './components/screens/IdleScreen'
 import OfflineScreen   from './components/screens/OfflineScreen'
 import BrowseScreen    from './components/screens/BrowseScreen'
@@ -31,6 +32,14 @@ export default function KioskPage() {
   // Returning null until mounted lets the client render fresh with the correct config.
   const [mounted, setMounted] = useState(false)
   useEffect(() => { setMounted(true) }, [])
+
+  // Breadcrumb telemetry: boot marker + global error/rejection hooks → kiosk_events.
+  // Waits for mount so the machine code comes from the real URL param, not the
+  // SF1 SSR default.
+  useEffect(() => {
+    if (!mounted) return
+    return initTelemetry(config.machineId)
+  }, [mounted, config.machineId])
 
   // Load real products from Supabase on init.
   // On failure/empty the catalog stays EMPTY (never a demo/placeholder list —
@@ -320,14 +329,25 @@ export default function KioskPage() {
       // does not exist on the deployed site, so the old fetch silently 404'd and no
       // heartbeat was ever recorded.) machine_heartbeats allows this write; PK = machine_code.
       try {
+        // Memory + uptime ride along on every heartbeat so a WebView leak shows
+        // up as a climbing mem_used_mb curve BEFORE the freeze (SF2, Aug 1 2026).
         await supabase.from('machine_heartbeats').upsert(
           {
             machine_code: config.machineId,
             last_seen: new Date().toISOString(),
             updated_at: new Date().toISOString(),
+            uptime_min: uptimeMinutes(),
+            ...memorySnapshot(),
           },
           { onConflict: 'machine_code' },
         )
+        // Heartbeats are upserts — each overwrites the last, so the freeze wipes
+        // the evidence. Warn into kiosk_events (append-only) when the heap is
+        // within 80% of the WebView's limit: that trail survives the crash.
+        const mem = memorySnapshot()
+        if (mem && mem.mem_limit_mb > 0 && mem.mem_used_mb / mem.mem_limit_mb > 0.8) {
+          logEvent(config.machineId, 'memory_high', `${mem.mem_used_mb}/${mem.mem_limit_mb} MB`)
+        }
       } catch { /* offline — heartbeat monitor will notice the gap */ }
     }
     sendHeartbeat()
