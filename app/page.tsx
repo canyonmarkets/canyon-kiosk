@@ -314,9 +314,44 @@ export default function KioskPage() {
         })
         .catch(() => { /* offline — dash shows "no reply", poll catches up later */ })
     })
+    // Remote heap flush: broadcast {event:'reload', payload:{machine}} on this
+    // channel (payload.machine = code or 'ALL') and the kiosk reloads its own
+    // page — dumps the WebView JS heap with zero power/Wi-Fi interruption
+    // (unlike the device reboots that stranded a call-center kiosk). Refuses
+    // while a customer is mid-session; safe to fire from home instead of
+    // driving to the site.
+    channel.on('broadcast', { event: 'reload' }, ({ payload }) => {
+      const target = payload?.machine
+      if (target !== 'ALL' && target !== config.machineId) return
+      const { screen: cur, cart: curCart } = useKioskStore.getState()
+      if (cur !== 'idle' || curCart.length > 0) {
+        logEvent(config.machineId, 'reload_skipped', `remote reload refused: screen=${cur}, cart=${curCart.length}`)
+        return
+      }
+      logEvent(config.machineId, 'self_reload', 'remote reload command')
+      setTimeout(() => window.location.reload(), 1500)  // let the breadcrumb land first
+    })
     channel.subscribe()
     return () => { supabase.removeChannel(channel) }
   }, [])
+
+  // ── Scheduled self-reload: dump the JS heap without reboot or Wi-Fi drop ──
+  // The suspected SF2 freeze cause is heap growth over days of 24/7 uptime.
+  // Reloading the page discards the entire heap while the tablet, Android,
+  // Fully, and the Wi-Fi connection stay untouched. Fires only on the idle
+  // screen with an empty cart, so a customer can never be interrupted; a busy
+  // kiosk just retries a minute later.
+  useEffect(() => {
+    const MAX_UPTIME_MIN = 12 * 60
+    const iv = setInterval(() => {
+      const { screen: cur, cart: curCart } = useKioskStore.getState()
+      if (cur !== 'idle' || curCart.length > 0) return
+      if (uptimeMinutes() < MAX_UPTIME_MIN) return
+      logEvent(config.machineId, 'self_reload', `scheduled heap flush at uptime ${uptimeMinutes()} min`)
+      setTimeout(() => window.location.reload(), 1500)
+    }, 60 * 1000)
+    return () => clearInterval(iv)
+  }, [config.machineId])
 
   // ── Heartbeat: ping every minute ─────────────────────────────────────────
   // The dashboard (and the email alert function) flag a machine OFFLINE when
