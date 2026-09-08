@@ -116,9 +116,24 @@ export default function PaymentScreen({ onApproved, isActive }: { onApproved: (t
           body: JSON.stringify({ amountCents, referenceId, machineId: config.machineId, items, subtotal, tax }),
           signal: controller.signal,
         })
+      } catch (netErr) {
+        // The request never reached the server (abort at 20s, DNS/TLS failure,
+        // dead uplink). Before this, that fact died right here in a catch and
+        // the kiosk went straight back to a healthy-looking attract screen —
+        // ready to walk the next shopper into the same 20-second wall. Say it
+        // out loud instead: this is the strongest possible proof the backend is
+        // gone, so flip the offline state NOW rather than waiting out the
+        // staleness window.
+        useKioskStore.getState().reportNetFailure(
+          netErr instanceof Error ? netErr.message : 'charge request never reached the server')
+        useKioskStore.getState().markBackendUnreachable()
+        throw netErr
       } finally {
         clearTimeout(connectTimer)
       }
+
+      // The server answered — reachable, whatever the verdict turns out to be.
+      useKioskStore.getState().noteServerContact()
 
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: 'Unknown error' }))

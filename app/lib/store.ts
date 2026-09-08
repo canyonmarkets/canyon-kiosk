@@ -56,7 +56,25 @@ interface KioskStore {
   reportNetFailure: (msg: string) => void
   clearNetFailure: () => void
   setBrowserOffline: (down: boolean) => void
+
+  // Backend reachability (drives OfflineScreen + the checkout gate).
+  // MB1, 2026-09-07: the kiosk sat for 6h18m showing a perfect, browsable
+  // storefront it could not take a payment on, because the old offline gate
+  // only fired on an EMPTY catalog or navigator.onLine — and MB1 had 242
+  // products cached in memory while Android happily reported onLine:true on a
+  // dead uplink. Reachability has to be judged by "did we actually round-trip
+  // to the server recently", not by what we happen to be holding in RAM.
+  lastServerContactAt: number
+  backendStale: boolean
+  noteServerContact: () => void
+  evaluateStaleness: () => void
+  markBackendUnreachable: () => void
 }
+
+// A card cannot be charged without the server, so the shopper must be told the
+// moment we're confident it's gone. The heartbeat runs every 60s, so three
+// consecutive misses is a real outage rather than one throttled tick.
+export const BACKEND_STALE_MS = 3 * 60 * 1000
 
 export const useKioskStore = create<KioskStore>()((set, get) => ({
   screen: 'idle',
@@ -124,4 +142,46 @@ export const useKioskStore = create<KioskStore>()((set, get) => ({
   })),
   clearNetFailure: () => set({ offline: null }),
   setBrowserOffline: (browserOffline) => set({ browserOffline }),
+
+  lastServerContactAt: Date.now(),
+  backendStale: false,
+  // Called on EVERY successful server round-trip (heartbeat, catalog refresh,
+  // charge). The heartbeat is the real clock here: at 60s it's the only call
+  // frequent enough to notice an outage before a shopper does.
+  noteServerContact: () => set((s) =>
+    // Recovering clears the outage record immediately — waiting on the 5-minute
+    // catalog refresh to call clearNetFailure would strand the offline screen up
+    // for minutes after the kiosk could sell again.
+    s.backendStale
+      ? { lastServerContactAt: Date.now(), backendStale: false, offline: null }
+      : { lastServerContactAt: Date.now() }),
+  evaluateStaleness: () => set((s) => {
+    const stale = Date.now() - s.lastServerContactAt > BACKEND_STALE_MS
+    if (stale === s.backendStale) return {}
+    if (!stale) return { backendStale: false }
+    // Going stale has to populate `offline` too: OfflineScreen renders from that
+    // record and bails to null without it. `since` is the last time we genuinely
+    // reached the server, which is exactly what its "offline since" line means.
+    return {
+      backendStale: true,
+      offline: s.offline ?? {
+        since: s.lastServerContactAt,
+        attempts: 1,
+        lastAttemptAt: Date.now(),
+        lastError: 'no response from the server',
+      },
+    }
+  }),
+  // A charge request that never reached the server is proof, not a hint — don't
+  // make the next shopper wait out the 3-minute staleness window to be told.
+  markBackendUnreachable: () => set((s) => ({
+    lastServerContactAt: Date.now() - BACKEND_STALE_MS - 1,
+    backendStale: true,
+    offline: s.offline ?? {
+      since: s.lastServerContactAt,
+      attempts: 1,
+      lastAttemptAt: Date.now(),
+      lastError: 'charge request never reached the server',
+    },
+  })),
 }))

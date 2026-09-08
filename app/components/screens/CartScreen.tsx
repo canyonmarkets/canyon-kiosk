@@ -3,7 +3,12 @@ import { useKioskStore } from '../../lib/store'
 import Image from 'next/image'
 
 export default function CartScreen() {
-  const { setScreen, cart, clearCart, changeQty, cartSubtotal, cartTax, cartTotal, cartCount, config } = useKioskStore()
+  const { setScreen, cart, clearCart, changeQty, cartSubtotal, cartTax, cartTotal, cartCount, config, backendStale, browserOffline } = useKioskStore()
+
+  // Card payment runs through a server call, so with the backend unreachable
+  // "Pay Now" is a 20-second wall and a confusing error. Say so up front and
+  // don't let anyone walk into it (MB1, 2026-09-07).
+  const cantPay = backendStale || browserOffline
 
   const count    = cartCount()
   const subtotal = cartSubtotal()
@@ -109,6 +114,16 @@ export default function CartScreen() {
           </div>
         </div>
 
+        {cantPay && (
+          <div style={{
+            borderRadius: 12, border: '2px solid #f87171', background: 'rgba(248,113,113,0.12)',
+            color: '#f87171', padding: '14px 16px', fontSize: 17, fontWeight: 600, textAlign: 'center',
+          }}>
+            Card payments are temporarily unavailable at this kiosk.<br />
+            <span style={{ fontWeight: 500, fontSize: 15 }}>Sorry — please try again shortly.</span>
+          </div>
+        )}
+
         <div style={{ display: 'flex', gap: 14, alignItems: 'stretch' }}>
           <button className="btn-outline" onClick={() => setScreen('browse')} style={{ flex: 1, padding: 18 }}>
             + Browse
@@ -132,10 +147,10 @@ export default function CartScreen() {
           <button
             className="btn-primary"
             onClick={() => setScreen('payment')}
-            disabled={cart.length === 0}
+            disabled={cart.length === 0 || cantPay}
             style={{ flex: 1, padding: 18, fontSize: 21 }}
           >
-            Pay Now →
+            {cantPay ? 'Unavailable' : 'Pay Now →'}
           </button>
         </div>
       </div>

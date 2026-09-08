@@ -3,7 +3,7 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 import { useKioskStore } from './lib/store'
 import { loadMarketProducts } from './lib/loadMachineProducts'
 import { supabase } from './lib/supabase'
-import { initTelemetry, logEvent, memorySnapshot, uptimeMinutes } from './lib/telemetry'
+import { initTelemetry, logEvent, logOfflineTick, memorySnapshot, uptimeMinutes } from './lib/telemetry'
 import IdleScreen      from './components/screens/IdleScreen'
 import OfflineScreen   from './components/screens/OfflineScreen'
 import BrowseScreen    from './components/screens/BrowseScreen'
@@ -20,12 +20,19 @@ const CART_IDLE_SECONDS = 20  // 20 seconds — fast turnover for high-traffic s
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e))
 
 export default function KioskPage() {
-  const { screen, setScreen, clearCart, cart, config, setProducts, productsLoading, products, offline, browserOffline } = useKioskStore()
+  const { screen, setScreen, clearCart, cart, config, setProducts, productsLoading, products, offline, browserOffline, backendStale } = useKioskStore()
 
   // ?offline=1 forces the offline state — for testing the offline screen on a
   // dev box or a live kiosk without actually cutting its network.
   const [simOffline] = useState(() =>
     typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('offline'))
+
+  // ?stale=1 reproduces the MB1 (2026-09-07) failure exactly — catalog loaded
+  // and cached, backend unreachable. ?offline=1 CANNOT reproduce it, because it
+  // empties the catalog and so trips the old gate; the whole six-hour outage
+  // happened in the gap between those two states.
+  const [simStale] = useState(() =>
+    typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('stale'))
 
   // Prevent React hydration mismatch: the SSR pre-build uses the default machineId
   // ('SF1') but every other machine reads a different URL param on the client.
@@ -55,7 +62,11 @@ export default function KioskPage() {
       return
     }
     loadMarketProducts(config.machineId)
-      .then((products) => { setProducts(products); useKioskStore.getState().clearNetFailure() })
+      .then((products) => {
+        setProducts(products)
+        useKioskStore.getState().clearNetFailure()
+        useKioskStore.getState().noteServerContact()
+      })
       .catch((err) => {
         // network error on first boot — clear loading spinner; the empty-catalog
         // retry below keeps trying and the offline screen shows meanwhile
@@ -242,7 +253,9 @@ export default function KioskPage() {
       loadMarketProducts(config.machineId)
         .then((products) => {
           if (products.length > 0) setProducts(products)
+          if (simStale) return
           useKioskStore.getState().clearNetFailure()
+          useKioskStore.getState().noteServerContact()
         })
         .catch((err) => {
           // offline — keep current catalog; track the failure so the offline
@@ -388,11 +401,15 @@ export default function KioskPage() {
         // Heartbeats are upserts — each overwrites the last, so the freeze wipes
         // the evidence. Warn into kiosk_events (append-only) when the heap is
         // within 80% of the WebView's limit: that trail survives the crash.
+        // A completed upsert is the strongest proof the backend is reachable,
+        // and at 60s it's our fastest one — this is the clock the offline
+        // screen and the checkout gate both run on.
+        if (!simStale) useKioskStore.getState().noteServerContact()
         const mem = memorySnapshot()
         if (mem && mem.mem_limit_mb > 0 && mem.mem_used_mb / mem.mem_limit_mb > 0.8) {
           logEvent(config.machineId, 'memory_high', `${mem.mem_used_mb}/${mem.mem_limit_mb} MB`)
         }
-      } catch { /* offline — heartbeat monitor will notice the gap */ }
+      } catch { /* offline — the staleness ticker below surfaces it to the shopper */ }
     }
     sendHeartbeat()
     const interval = setInterval(sendHeartbeat, 60 * 1000)
@@ -413,6 +430,54 @@ export default function KioskPage() {
       window.removeEventListener('focus', onFocus)
     }
   }, [config.machineId])
+
+  // ── Backend staleness watch ───────────────────────────────────────────────
+  // Turns "we haven't reached the server in a while" into something the shopper
+  // can actually SEE. MB1 (2026-09-07) is why this exists: with a cached catalog
+  // and navigator.onLine stuck true on a dead uplink, the kiosk spent six hours
+  // walking residents all the way to a 20-second payment timeout and then
+  // resetting to a healthy-looking attract screen.
+  //
+  // It also drops an offline_tick breadcrumb every 5 min while unreachable.
+  // Those queue to localStorage and flush on the next boot, and the timestamp of
+  // the LAST one is the whole ballgame: ticks that run to the moment power was
+  // cut mean the app was alive on a dead network; ticks that stop dead hours
+  // earlier mean the WebView froze. Today we cannot tell those apart.
+  useEffect(() => {
+    if (!mounted) return
+    const OFFLINE_TICK_MS = 5 * 60 * 1000
+    let staleSince = 0
+    let lastTick = 0
+
+    const check = () => {
+      if (simStale) useKioskStore.getState().markBackendUnreachable()
+      useKioskStore.getState().evaluateStaleness()
+      const { backendStale: stale, offline: off } = useKioskStore.getState()
+      const now = Date.now()
+
+      if (stale && !staleSince) {
+        staleSince = now
+        lastTick = now
+        logOfflineTick(config.machineId, { phase: 'went_stale', lastError: off?.lastError ?? null })
+      } else if (stale && now - lastTick >= OFFLINE_TICK_MS) {
+        lastTick = now
+        logOfflineTick(config.machineId, {
+          phase: 'still_down',
+          offline_sec: Math.round((now - staleSince) / 1000),
+          attempts: off?.attempts ?? null,
+        })
+      } else if (!stale && staleSince) {
+        // This one can go over the wire — the backend is back.
+        logEvent(config.machineId, 'net_recovered',
+          `backend reachable again after ${Math.round((now - staleSince) / 1000)}s unreachable`)
+        staleSince = 0
+      }
+    }
+
+    check()
+    const iv = setInterval(check, 15 * 1000)
+    return () => clearInterval(iv)
+  }, [mounted, config.machineId, simStale])
 
   // ── Screen wake lock: keep the tablet awake 24/7 ─────────────────────────
   // Sleep is fatal here: once the screen turns off the page becomes `hidden`,
@@ -471,7 +536,7 @@ export default function KioskPage() {
         <div className={`kiosk-screen${screen === 'idle' ? ' active' : ''}`} style={{ alignItems: 'center', justifyContent: 'center', gap: 0, padding: '24px 0 20px' }}>
           {/* Invisible tap zone on logo for admin access */}
           <div style={{ position: 'absolute', top: 0, left: 0, width: 120, height: 120, zIndex: 10, cursor: 'default' }} onClick={handleLogoTap} />
-          {offline && (products.length === 0 || browserOffline)
+          {backendStale || (offline && (products.length === 0 || browserOffline))
             ? <OfflineScreen />
             : <IdleScreen />}
         </div>
