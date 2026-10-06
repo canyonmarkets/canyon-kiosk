@@ -1,5 +1,5 @@
 'use client'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useKioskStore } from '../lib/store'
 
 const COUNTDOWN_SEC = 20
@@ -13,17 +13,30 @@ interface Props {
 export default function TimeoutModal({ visible, onKeep, onCancel }: Props) {
   const [secs, setSecs] = useState(COUNTDOWN_SEC)
 
+  // The parent hands us a fresh onCancel on every render, and background store
+  // updates (heartbeat / server-contact watch) re-render it every ~15s. With
+  // onCancel as an effect dependency that restarted the countdown at 20 each
+  // time, so it never reached 0. Read the latest callback from a ref instead:
+  // the countdown now starts once when the modal opens and runs to zero.
+  const onCancelRef = useRef(onCancel)
+  useEffect(() => { onCancelRef.current = onCancel }, [onCancel])
+
   useEffect(() => {
     if (!visible) { setSecs(COUNTDOWN_SEC); return }
     setSecs(COUNTDOWN_SEC)
+    let fired = false
     const interval = setInterval(() => {
       setSecs((s) => {
-        if (s <= 1) { clearInterval(interval); onCancel(); return 0 }
+        if (s <= 1) {
+          clearInterval(interval)
+          if (!fired) { fired = true; setTimeout(() => onCancelRef.current(), 0) }
+          return 0
+        }
         return s - 1
       })
     }, 1000)
     return () => clearInterval(interval)
-  }, [visible, onCancel])
+  }, [visible])
 
   if (!visible) return null
 
