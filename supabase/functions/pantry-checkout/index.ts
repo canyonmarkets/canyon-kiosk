@@ -61,24 +61,40 @@ Deno.serve(async (req) => {
     // Pantry sites: no card charge, no tax — the "sale" is a consumption record
     // billed monthly at sellPrice. Status PROCESSED so the dash's kiosk sync
     // ingests it into sale_records (source Pantry) and decrements on-hand.
-    const subtotal = Math.round(
-      (items as CheckoutItem[]).reduce((sum, i) => sum + i.qty * i.unitPrice, 0) * 100
-    ) / 100
-
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+
+    // This endpoint is unauthenticated (the pantry tablet posts with no JWT), so
+    // it must never be able to mint a PROCESSED sale for a PAYMENT kiosk — that
+    // would ingest as card revenue and decrement that store's stock. Only a
+    // machine of type 'pantry' may be written here, and prices come from the
+    // catalog, not from the request.
+    const { data: machine } = await supabase.from('machines').select('id, type').eq('code', siteCode).maybeSingle()
+    if (!machine || String(machine.type).toLowerCase() !== 'pantry') {
+      return json({ error: `siteCode "${siteCode}" is not a pantry machine` }, 403)
+    }
+    const ids = [...new Set((items as CheckoutItem[]).map(i => i.productId))]
+    const { data: catalog } = await supabase.from('products').select('id, name, sellPrice').in('id', ids)
+    const priceById = new Map(
+      (catalog ?? []).map((p: { id: string; name: string; sellPrice: number | string }) =>
+        [p.id, { name: p.name, price: Number(p.sellPrice) || 0 }] as const)
+    )
+    const priced = (items as CheckoutItem[]).map(i => {
+      const cat = priceById.get(i.productId)
+      return { productId: i.productId, name: cat?.name ?? i.name ?? '', qty: i.qty, unitPrice: cat ? cat.price : i.unitPrice }
+    })
+    const subtotal = Math.round(priced.reduce((sum, i) => sum + i.qty * i.unitPrice, 0) * 100) / 100
+
     const { error } = await supabase.from('kiosk_sales').insert({
       id: referenceId,
       machine_code: siteCode,
-      items: (items as CheckoutItem[]).map(i => ({
-        productId: i.productId,
-        name: i.name ?? '',
-        qty: i.qty,
-        unitPrice: i.unitPrice,
-      })),
+      items: priced,
       subtotal,
       tax: 0,
       total: subtotal,
       status: 'PROCESSED',
+      // Stamp the real checkout time; the ingest otherwise dated a late sync's
+      // rows at sync time (a 11:55 PM month-end checkout billed next month).
+      completed_at: new Date().toISOString(),
     })
 
     if (error) {

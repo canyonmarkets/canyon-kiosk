@@ -53,12 +53,16 @@ Deno.serve(async (req) => {
       const pi = event.data.object as Stripe.PaymentIntent
       const referenceId = pi.metadata?.referenceId
       if (referenceId) {
+        // Guarded: Stripe does not guarantee event order, so a late failure event
+        // must never overwrite a PROCESSED row (money captured, sale erased).
         await supabase.from('payment_results')
           .update({ status: 'CANCELED', updated_at: new Date().toISOString() })
           .eq('reference_id', referenceId)
+          .eq('status', 'PENDING')
         await supabase.from('kiosk_sales')
           .update({ status: 'CANCELED', completed_at: null })
           .eq('id', referenceId)
+          .eq('status', 'PENDING')
       }
 
     } else if (event.type === 'terminal.reader.action_failed') {
@@ -78,10 +82,12 @@ Deno.serve(async (req) => {
           await Promise.all([
             supabase.from('payment_results')
               .update({ status: 'CANCELED', updated_at: new Date().toISOString() })
-              .eq('reference_id', pr.reference_id),
+              .eq('reference_id', pr.reference_id)
+              .eq('status', 'PENDING'),
             supabase.from('kiosk_sales')
               .update({ status: 'CANCELED', completed_at: null })
-              .eq('id', pr.reference_id),
+              .eq('id', pr.reference_id)
+              .eq('status', 'PENDING'),
           ])
         }
       }

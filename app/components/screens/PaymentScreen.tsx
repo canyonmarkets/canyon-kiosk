@@ -39,14 +39,20 @@ export default function PaymentScreen({ onApproved, isActive }: { onApproved: (t
   // abort/timeout can race ahead of the server presenting the PaymentIntent). Safe to
   // fire for a stale reference: charge-cancel (F6) only clears the reader when THAT
   // reference's PaymentIntent is the one currently on it.
-  const cancelCharge = (ref: string) => {
+  // Resolves to the server's verdict for this reference ('PROCESSED' when the card
+  // was tapped before the cancel landed, i.e. money moved) or null when unknown.
+  const cancelCharge = async (ref: string): Promise<string | null> => {
     const send = () => fetch(`${SUPABASE_URL}/functions/v1/charge-cancel`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${SUPABASE_ANON_KEY}` },
       body: JSON.stringify({ referenceId: ref, machineId: config.machineId }),
-    }).catch(() => { /* best-effort */ })
-    send()
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => (j && typeof j.status === 'string' ? (j.status as string) : null))
+      .catch(() => null)
+    const first = await send()
     setTimeout(send, 3000)
+    return first
   }
 
   const handleApproved = () => {
@@ -151,16 +157,26 @@ export default function PaymentScreen({ onApproved, isActive }: { onApproved: (t
       // Timeout — if terminal never responds. Disarm the reader (with retry) so the
       // terminal clears and a late tap can't charge the next customer / leave the
       // reader busy. Mirrors the "Cancel & Return to Cart" button below.
-      timerRef.current = setTimeout(() => {
+      timerRef.current = setTimeout(async () => {
         stopPolling()
         const ref = refIdRef.current
         refIdRef.current = null       // (F2) let any in-flight continuation bail
-        if (ref) cancelCharge(ref)    // (F4/F5) disarm reader, best-effort + retry
         setPayStatus('timeout')
         // Track the return-to-cart nav in timerRef so stopPolling() (cancel button,
         // screen change, a new payment attempt) clears it — a stale navigation
         // firing into a NEXT payment attempt would abandon a live charge.
         timerRef.current = setTimeout(() => setScreen('cart'), 4000)
+        if (!ref) return
+        // (F4/F5) Disarm the reader — and LISTEN to the answer. charge-cancel reports
+        // PROCESSED when the card was tapped in the last instant before the timeout:
+        // money moved, so show approval and record the sale instead of a false
+        // "timed out" (the old fire-and-forget cancel left the customer to pay twice).
+        const status = await cancelCharge(ref)
+        if (status === 'PROCESSED' && !approvedRef.current) {
+          stopPolling()               // clears the pending return-to-cart nav
+          setPayStatus('approved')
+          timerRef.current = setTimeout(handleApproved, 800)
+        }
       }, PAYMENT_TIMEOUT_SEC * 1000)
 
       // Poll for terminal result
@@ -329,11 +345,21 @@ export default function PaymentScreen({ onApproved, isActive }: { onApproved: (t
           otherwise clear the pending handleApproved and strand a paid-for cart, inviting
           a double charge. There is nothing to cancel after approval anyway. */}
       {payStatus !== 'approved' && (
-        <button className="btn-outline" onClick={() => {
+        <button className="btn-outline" onClick={async () => {
           stopPolling()
           const ref = refIdRef.current
           refIdRef.current = null       // (F2) so any in-flight charge continuation bails
-          if (ref) cancelCharge(ref)    // (F4/F5) disarm the reader, best-effort + retry
+          if (!ref) { setScreen('cart'); return }
+          // (F4/F5) Disarm the reader — and LISTEN to the answer. If the card was
+          // tapped just as Cancel was pressed, charge-cancel reports PROCESSED: money
+          // moved, so complete the sale rather than dump a paid-for cart back on
+          // screen (which invited a second charge). Bounded wait so Cancel stays snappy.
+          const status = await Promise.race([cancelCharge(ref), new Promise<null>((res) => setTimeout(() => res(null), 2500))])
+          if (status === 'PROCESSED' && !approvedRef.current) {
+            setPayStatus('approved')
+            timerRef.current = setTimeout(handleApproved, 800)
+            return
+          }
           setScreen('cart')
         }} style={{ marginTop: 4, padding: '14px 44px', fontSize: 18 }}>
           ← Cancel &amp; Return to Cart
