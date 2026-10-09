@@ -3,19 +3,24 @@ import { useEffect, useState } from 'react'
 import { useKioskStore } from '../lib/store'
 
 export default function OfflineBanner() {
-  const [offline, setOffline] = useState(false)
+  const [browserDown, setBrowserDown] = useState(false)
   const screen = useKioskStore((s) => s.screen)
+  // navigator.onLine alone missed the MB1 outage entirely (Android reports
+  // onLine:true on a dead uplink), so the banner watches real server contact
+  // too — otherwise someone browsing mid-outage gets no warning at all until
+  // they reach the cart.
+  const backendStale = useKioskStore((s) => s.backendStale)
 
   useEffect(() => {
-    const onOnline  = () => setOffline(false)
-    const onOffline = () => setOffline(true)
-    setOffline(!navigator.onLine)
+    const onOnline  = () => setBrowserDown(false)
+    const onOffline = () => setBrowserDown(true)
+    setBrowserDown(!navigator.onLine)
     window.addEventListener('online',  onOnline)
     window.addEventListener('offline', onOffline)
     return () => { window.removeEventListener('online', onOnline); window.removeEventListener('offline', onOffline) }
   }, [])
 
-  if (!offline) return null
+  if (!browserDown && !backendStale) return null
   // On idle the full-screen OfflineScreen owns this state — the banner would
   // just stack on top of it. Mid-transaction screens still get the banner.
   if (screen === 'idle') return null
