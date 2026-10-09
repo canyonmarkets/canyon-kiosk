@@ -6,6 +6,7 @@ import { supabase } from './lib/supabase'
 import { initTelemetry, logEvent, logOfflineTick, memorySnapshot, uptimeMinutes } from './lib/telemetry'
 import IdleScreen      from './components/screens/IdleScreen'
 import OfflineScreen   from './components/screens/OfflineScreen'
+import ReaderOfflineScreen from './components/screens/ReaderOfflineScreen'
 import BrowseScreen    from './components/screens/BrowseScreen'
 import ProductsScreen  from './components/screens/ProductsScreen'
 import CartScreen      from './components/screens/CartScreen'
@@ -20,7 +21,7 @@ const CART_IDLE_SECONDS = 20  // 20 seconds — fast turnover for high-traffic s
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e))
 
 export default function KioskPage() {
-  const { screen, setScreen, clearCart, cart, config, setProducts, productsLoading, products, offline, browserOffline, backendStale } = useKioskStore()
+  const { screen, setScreen, clearCart, cart, config, setProducts, productsLoading, products, offline, browserOffline, backendStale, readerOffline } = useKioskStore()
 
   // ?offline=1 forces the offline state — for testing the offline screen on a
   // dev box or a live kiosk without actually cutting its network.
@@ -33,6 +34,11 @@ export default function KioskPage() {
   // happened in the gap between those two states.
   const [simStale] = useState(() =>
     typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('stale'))
+
+  // ?readeroff=1 shows the card-reader-offline state with the tablet healthy,
+  // the MB1 2026-10-09 failure, without unplugging a real reader.
+  const [simReaderOff] = useState(() =>
+    typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('readeroff'))
 
   // Prevent React hydration mismatch: the SSR pre-build uses the default machineId
   // ('SF1') but every other machine reads a different URL param on the client.
@@ -163,6 +169,14 @@ export default function KioskPage() {
     if (raw.length < 4) return
     if (showAdmin || showPinEntry) return
     if (screen === 'payment' || screen === 'thankyou') return
+    // Nothing scanned can be paid for, so don't put it in a cart. Telling the
+    // shopper before they're holding a full cart also takes away the moment
+    // where walking off with it starts to look like the easy option.
+    const { readerOffline: readerDown, backendStale: serverDown } = useKioskStore.getState()
+    if (readerDown || serverDown) {
+      showScanFeedback('Card payments are unavailable right now', false)
+      return
+    }
     if (useKioskStore.getState().productsLoading) {
       showScanFeedback('Loading inventory… please try again', false)
       return
@@ -381,6 +395,21 @@ export default function KioskPage() {
   // inside that window. A 5-min interval made healthy kiosks flap offline on
   // any jitter or one throttled tick.
   useEffect(() => {
+    // Card reader status rides the heartbeat clock. The kiosk can't ask Stripe
+    // itself (no secret key on a public tablet), so it reads the snapshot the
+    // dash's stripe-reader-alert function writes every 5 minutes. Any read
+    // failure leaves the current state alone; the store fails open on a
+    // missing or stale snapshot.
+    const checkReader = async () => {
+      if (simReaderOff) { useKioskStore.getState().markReaderOffline(); return }
+      try {
+        const { data, error } = await supabase
+          .from('app_config').select('value').eq('key', 'readerStatusLast').maybeSingle()
+        if (error) return
+        useKioskStore.getState().applyReaderSnapshot(data?.value, config.machineId)
+      } catch { /* network blip, next heartbeat retries */ }
+    }
+
     const sendHeartbeat = async () => {
       // Write straight to Supabase. (The kiosk is a static export — `/api/heartbeat`
       // does not exist on the deployed site, so the old fetch silently 404'd and no
@@ -405,6 +434,7 @@ export default function KioskPage() {
         // and at 60s it's our fastest one — this is the clock the offline
         // screen and the checkout gate both run on.
         if (!simStale) useKioskStore.getState().noteServerContact()
+        await checkReader()
         const mem = memorySnapshot()
         if (mem && mem.mem_limit_mb > 0 && mem.mem_used_mb / mem.mem_limit_mb > 0.8) {
           logEvent(config.machineId, 'memory_high', `${mem.mem_used_mb}/${mem.mem_limit_mb} MB`)
@@ -538,7 +568,9 @@ export default function KioskPage() {
           <div style={{ position: 'absolute', top: 0, left: 0, width: 120, height: 120, zIndex: 10, cursor: 'default' }} onClick={handleLogoTap} />
           {backendStale || (offline && (products.length === 0 || browserOffline))
             ? <OfflineScreen />
-            : <IdleScreen />}
+            : readerOffline
+              ? <ReaderOfflineScreen />
+              : <IdleScreen />}
         </div>
 
         <div className={`kiosk-screen${screen === 'browse' ? ' active' : ''}`}>

@@ -69,7 +69,29 @@ interface KioskStore {
   noteServerContact: () => void
   evaluateStaleness: () => void
   markBackendUnreachable: () => void
+
+  // Card reader reachability (drives ReaderOfflineScreen + the checkout gate).
+  // MB1, 2026-10-09: the tablet was healthy all morning while its WisePOS E sat
+  // off Wi-Fi, so four residents filled a cart and only learned at Pay that the
+  // kiosk couldn't take a card. The reader's status comes from the dash's
+  // stripe-reader-alert function (app_config.readerStatusLast, every 5 min).
+  readerOffline: boolean
+  readerOfflineSince: number | null
+  readerOfflineDetectedAt: number
+  applyReaderSnapshot: (snapshot: unknown, machineCode: string) => void
+  markReaderOffline: () => void
 }
+
+export interface ReaderSnapshot {
+  at: string
+  readers: { code: string; status: string; last_seen_at?: number | null }[]
+}
+
+// The snapshot is rewritten every 5 minutes. Older than this means the alert
+// function itself has stopped, and a dead monitor must never lock a working
+// kiosk out of selling, so we fail OPEN and let the shopper try.
+export const READER_SNAPSHOT_MAX_AGE_MS = 15 * 60 * 1000
+const READER_REFUSAL_HOLD_MS = 5 * 60 * 1000
 
 // A card cannot be charged without the server, so the shopper must be told the
 // moment we're confident it's gone. The heartbeat runs every 60s, so three
@@ -183,5 +205,42 @@ export const useKioskStore = create<KioskStore>()((set, get) => ({
       lastAttemptAt: Date.now(),
       lastError: 'charge request never reached the server',
     },
+  })),
+
+  readerOffline: false,
+  readerOfflineSince: null,
+  readerOfflineDetectedAt: 0,
+  applyReaderSnapshot: (snapshot, machineCode) => set((s) => {
+    const snap = snapshot as ReaderSnapshot | null | undefined
+    const snapAt = snap?.at ? Date.parse(snap.at) : NaN
+    const entry = Array.isArray(snap?.readers)
+      ? snap.readers.find((r) => r.code?.toUpperCase() === machineCode.toUpperCase())
+      : undefined
+    const clear = { readerOffline: false, readerOfflineSince: null, readerOfflineDetectedAt: 0 }
+    // Missing, stale, or no row for this machine (cash-only or a tenant
+    // without the monitor): fail open, but give a fresh charge refusal a few
+    // minutes first so the very next shopper isn't walked into the same wall.
+    if (!entry || !Number.isFinite(snapAt) || Date.now() - snapAt > READER_SNAPSHOT_MAX_AGE_MS) {
+      if (!s.readerOffline) return {}
+      return Date.now() - s.readerOfflineDetectedAt < READER_REFUSAL_HOLD_MS ? {} : clear
+    }
+    if (entry.status === 'offline') {
+      if (s.readerOffline) return {}
+      return {
+        readerOffline: true,
+        readerOfflineSince: entry.last_seen_at ?? Date.now(),
+        readerOfflineDetectedAt: Date.now(),
+      }
+    }
+    // A charge that Stripe refused as reader-offline is newer evidence than a
+    // snapshot taken before it, so only a snapshot from AFTER that refusal can
+    // clear it. Without this the screen would flicker off until the next run.
+    if (s.readerOffline && snapAt < s.readerOfflineDetectedAt) return {}
+    return s.readerOffline ? clear : {}
+  }),
+  markReaderOffline: () => set((s) => ({
+    readerOffline: true,
+    readerOfflineSince: s.readerOfflineSince ?? Date.now(),
+    readerOfflineDetectedAt: Date.now(),
   })),
 }))

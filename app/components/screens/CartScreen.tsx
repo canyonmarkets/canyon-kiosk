@@ -3,12 +3,13 @@ import { useKioskStore } from '../../lib/store'
 import Image from 'next/image'
 
 export default function CartScreen() {
-  const { setScreen, cart, clearCart, changeQty, cartSubtotal, cartTax, cartTotal, cartCount, config, backendStale, browserOffline } = useKioskStore()
+  const { setScreen, cart, clearCart, changeQty, cartSubtotal, cartTax, cartTotal, cartCount, config, backendStale, browserOffline, readerOffline } = useKioskStore()
 
   // Card payment runs through a server call, so with the backend unreachable
   // "Pay Now" is a 20-second wall and a confusing error. Say so up front and
-  // don't let anyone walk into it (MB1, 2026-09-07).
-  const cantPay = backendStale || browserOffline
+  // don't let anyone walk into it (MB1, 2026-09-07). Same for a card reader
+  // that's off Wi-Fi while the tablet is fine (MB1, 2026-10-09).
+  const cantPay = backendStale || browserOffline || readerOffline
 
   const count    = cartCount()
   const subtotal = cartSubtotal()

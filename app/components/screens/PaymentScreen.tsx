@@ -143,6 +143,12 @@ export default function PaymentScreen({ onApproved, isActive }: { onApproved: (t
 
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: 'Unknown error' }))
+        // Stripe refused because the reader itself is off the network. Flip the
+        // reader-offline state now so the next shopper is told on the attract
+        // screen instead of after filling a cart.
+        if (/reader is currently offline|terminal_reader_offline/i.test(String(err.error ?? ''))) {
+          useKioskStore.getState().markReaderOffline()
+        }
         throw new Error(err.error ?? 'Charge request failed')
       }
 
@@ -221,7 +227,9 @@ export default function PaymentScreen({ onApproved, isActive }: { onApproved: (t
       // busy for the next one. Retry then mints a fresh reference on a cleared reader.
       if (refIdRef.current) cancelCharge(refIdRef.current)
       setPayStatus('error')
-      setErrorMsg('We couldn’t start the payment. Please try again, or ask a team member for help.')
+      setErrorMsg(useKioskStore.getState().readerOffline
+        ? 'The card reader is offline, so this kiosk can’t take payments right now. Sorry about that.'
+        : 'We couldn’t start the payment. Please try again, or ask a team member for help.')
       // Self-recover: if nobody taps Retry/Cancel (customer walked away), return
       // to the cart so the kiosk can idle back to the attract screen on its own —
       // never leave a broken screen up waiting for manual intervention.
