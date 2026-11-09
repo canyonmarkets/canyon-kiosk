@@ -287,3 +287,16 @@ html, body {
   animation: brand-shimmer 7s ease-in-out infinite;
   filter: drop-shadow(2px 3px 6px rgba(0, 0, 0, 0.6));
 }
+
+/* Tapping finger on the "Not Scanning?" Browse button (Nov 9 2026) */
+.tap-finger {
+  display: inline-block;
+  line-height: 1;
+  animation: finger-tap 1.4s ease-in-out infinite;
+  transform-origin: 0% 50%;
+}
+@keyframes finger-tap {
+  0%, 55%, 100% { transform: translateX(0) scale(1); }
+  70%           { transform: translateX(7px) scale(0.94); }
+  85%           { transform: translateX(0) scale(1); }
+}

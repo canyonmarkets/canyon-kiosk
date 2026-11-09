@@ -30,6 +30,12 @@ interface KioskStore {
   removeFromCart: (productId: string) => void
   changeQty: (productId: string, delta: number) => void
   clearCart: () => void
+
+  // "Not Scanning?" popup (Nov 9 2026): the last barcode that matched nothing.
+  scanMiss: { code: string; at: number } | null
+  scanMissOpen: boolean
+  setScanMiss: (code: string | null) => void
+  closeScanMiss: () => void
   cartTotal: () => number
   cartSubtotal: () => number
   cartTax: () => number
@@ -105,6 +111,10 @@ export const useKioskStore = create<KioskStore>()((set, get) => ({
   setActiveCategory: (activeCategory) => set({ activeCategory }),
 
   cart: [],
+  scanMiss: null,
+  scanMissOpen: false,
+  setScanMiss: (code) => set(code ? { scanMiss: { code, at: Date.now() }, scanMissOpen: true } : { scanMiss: null, scanMissOpen: false }),
+  closeScanMiss: () => set({ scanMissOpen: false }),
   addToCart: (product) => set((s) => {
     const existing = s.cart.find((i) => i.product.id === product.id)
     if (existing) {

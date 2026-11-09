@@ -3,8 +3,13 @@ import { useState } from 'react'
 import { useKioskStore } from '../../lib/store'
 import { CATEGORIES } from '../../lib/products'
 
+import { logScanEvent } from '../../lib/telemetry'
+
+// A Browse pick within this long of a failed scan is reported as that code's product.
+const SCAN_MISS_PICK_WINDOW_MS = 3 * 60 * 1000
+
 export default function ProductsScreen() {
-  const { setScreen, activeCategory, products, addToCart, cartCount } = useKioskStore()
+  const { setScreen, activeCategory, products, addToCart, cartCount, config } = useKioskStore()
   const itemCount = cartCount()
   const [justAdded, setJustAdded] = useState<Record<string, boolean>>({})
 
@@ -15,6 +20,16 @@ export default function ProductsScreen() {
     const product = products.find((p) => p.id === id)
     if (!product) return
     addToCart(product)
+    // A barcode just failed and the shopper picked this from Browse: report the
+    // pair, which names the product whose UPC needs fixing. First pick only.
+    const miss = useKioskStore.getState().scanMiss
+    if (miss && Date.now() - miss.at < SCAN_MISS_PICK_WINDOW_MS) {
+      logScanEvent(config.machineId, 'scan_miss_picked', miss.code, {
+        productId: product.id, productName: product.name, productUpc: product.upc, productUpc2: product.upc2,
+        secondsAfterMiss: Math.round((Date.now() - miss.at) / 1000),
+      })
+      useKioskStore.getState().setScanMiss(null)
+    }
     setJustAdded((prev) => ({ ...prev, [id]: true }))
     setTimeout(() => setJustAdded((prev) => ({ ...prev, [id]: false })), 1200)
   }

@@ -3,7 +3,8 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 import { useKioskStore } from './lib/store'
 import { loadMarketProducts } from './lib/loadMachineProducts'
 import { supabase } from './lib/supabase'
-import { initTelemetry, logEvent, logOfflineTick, memorySnapshot, uptimeMinutes } from './lib/telemetry'
+import { initTelemetry, logEvent, logOfflineTick, logScanEvent, memorySnapshot, uptimeMinutes } from './lib/telemetry'
+import ScanMissModal   from './components/ScanMissModal'
 import IdleScreen      from './components/screens/IdleScreen'
 import OfflineScreen   from './components/screens/OfflineScreen'
 import ReaderOfflineScreen from './components/screens/ReaderOfflineScreen'
@@ -195,10 +196,15 @@ export default function KioskPage() {
     })
     if (product) {
       useKioskStore.getState().addToCart(product)
+      useKioskStore.getState().closeScanMiss()
       showScanFeedback(`✓ Added: ${product.name}`, true)
       setScreen('cart')
     } else {
-      showScanFeedback(`Not found: ${raw}`, false)
+      // "Not Scanning?" popup sends the shopper to Browse, and the miss is
+      // logged for the dashboard's scan-miss email. A Browse pick right after
+      // is logged too (ProductsScreen), naming the product with the bad UPC.
+      useKioskStore.getState().setScanMiss(raw)
+      logScanEvent(useKioskStore.getState().config.machineId, 'scan_miss', raw, { screen })
     }
     resetIdleTimer()
   }, [showAdmin, showPinEntry, screen, showScanFeedback, setScreen, resetIdleTimer])
@@ -593,6 +599,11 @@ export default function KioskPage() {
           <ThankYouScreen lastTotal={lastTotal} isActive={screen === 'thankyou'} />
         </div>
       </div>
+
+      {/* "Not Scanning?" popup */}
+      <ScanMissModal
+        onBrowse={() => { useKioskStore.getState().closeScanMiss(); setScreen('browse'); resetIdleTimer() }}
+      />
 
       {/* Idle timeout modal */}
       <TimeoutModal

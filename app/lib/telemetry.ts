@@ -172,3 +172,32 @@ export function initTelemetry(machineCode: string): () => void {
     document.removeEventListener('visibilitychange', onVisibility)
   }
 }
+
+// ── Scan misses (Nov 9 2026, ported from kiosk-core) ──────────────────────────
+// A barcode that matched nothing, and (if the shopper then browsed for it) the
+// product they picked. The dashboard's scan-miss alert emails these so a wrong
+// or missing UPC gets fixed the same day. Own cap, outside logEvent's.
+const MAX_SCAN_EVENTS_PER_SESSION = 300
+let scanEventCount = 0
+
+export function logScanEvent(
+  machineCode: string,
+  kind: 'scan_miss' | 'scan_miss_picked',
+  code: string,
+  meta?: Record<string, unknown>,
+) {
+  if (scanEventCount >= MAX_SCAN_EVENTS_PER_SESSION) return
+  scanEventCount++
+  const row: QueuedRow = {
+    machine_code: machineCode,
+    kind,
+    message: code.slice(0, 100),
+    stack: null,
+    meta: { code, ...meta },
+    created_at: new Date().toISOString(),
+  }
+  try {
+    void supabase.from('kiosk_events').insert(row)
+      .then(({ error }) => { if (error) queueRow(row) })
+  } catch { queueRow(row) }
+}
