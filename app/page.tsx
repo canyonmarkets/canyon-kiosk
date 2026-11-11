@@ -16,6 +16,7 @@ import ThankYouScreen  from './components/screens/ThankYouScreen'
 import TimeoutModal    from './components/TimeoutModal'
 import OfflineBanner   from './components/OfflineBanner'
 import AdminPanel      from './components/AdminPanel'
+import { SPLIT_JOIN_MS, isDigits, looksLikeQrText, QR_HINT } from './lib/scanText'
 
 const CART_IDLE_SECONDS = 20  // 20 seconds — fast turnover for high-traffic sites
 
@@ -148,13 +149,18 @@ export default function KioskPage() {
   const scanDivRef     = useRef<HTMLDivElement>(null)
   const barcodeBuffer  = useRef('')
   const barcodeTimer   = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const [scanMsg, setScanMsg] = useState<{ text: string; ok: boolean } | null>(null)
+  const [scanMsg, setScanMsg] = useState<{ text: string; ok: boolean; hint?: boolean } | null>(null)
   const scanMsgTimer   = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Split reads (lib/scanText.ts): the last digits-only piece that didn't match,
+  // and its miss, held back SPLIT_JOIN_MS in case the rest of the barcode follows.
+  const scanFrag       = useRef<{ text: string; at: number } | null>(null)
+  const pendingMiss    = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  const showScanFeedback = useCallback((text: string, ok: boolean) => {
-    setScanMsg({ text, ok })
+  // hint: amber and held longer, for "turn it around" (not an error).
+  const showScanFeedback = useCallback((text: string, ok: boolean, hint = false) => {
+    setScanMsg({ text, ok, hint })
     if (scanMsgTimer.current) clearTimeout(scanMsgTimer.current)
-    scanMsgTimer.current = setTimeout(() => setScanMsg(null), 2200)
+    scanMsgTimer.current = setTimeout(() => setScanMsg(null), hint ? 4500 : 2200)
   }, [])
 
   const refocusScanDiv = useCallback(() => {
@@ -167,9 +173,32 @@ export default function KioskPage() {
 
   const processBarcode = useCallback((raw: string) => {
     raw = raw.trim()
-    if (raw.length < 4) return
+    if (!raw) return
     if (showAdmin || showPinEntry) return
     if (screen === 'payment' || screen === 'thankyou') return
+    const stripLeadingZeros = (s: string) => s.replace(/^0+/, '') || s
+    // Match against EITHER barcode on the product (primary UPC or the optional 2nd
+    // barcode, e.g. a multipack vs. single) — both ring up the same item.
+    const findProduct = (code: string) => {
+      const want = stripLeadingZeros(code)
+      return useKioskStore.getState().products.find((p) => p.available && [p.upc, p.upc2].some((c) => {
+        const stored = (c ?? '').trim()
+        return stored && stripLeadingZeros(stored) === want
+      }))
+    }
+    // Split read: this piece may be the rest of the one just before it.
+    const now = Date.now()
+    const prev = scanFrag.current
+    scanFrag.current = null
+    if (prev && now - prev.at < SPLIT_JOIN_MS && isDigits(prev.text) && isDigits(raw) && findProduct(prev.text + raw)) {
+      if (pendingMiss.current) { clearTimeout(pendingMiss.current); pendingMiss.current = null }
+      raw = prev.text + raw
+    }
+    if (raw.length < 4) {
+      // Too short to be a barcode on its own; keep it in case the rest follows.
+      if (isDigits(raw)) scanFrag.current = { text: raw, at: now }
+      return
+    }
     // Nothing scanned can be paid for, so don't put it in a cart. Telling the
     // shopper before they're holding a full cart also takes away the moment
     // where walking off with it starts to look like the easy option.
@@ -182,29 +211,30 @@ export default function KioskPage() {
       showScanFeedback('Loading inventory… please try again', false)
       return
     }
-    const stripLeadingZeros = (s: string) => s.replace(/^0+/, '') || s
-    const normalizedRaw = stripLeadingZeros(raw)
-    const products = useKioskStore.getState().products
-    // Match against EITHER barcode on the product (primary UPC or the optional 2nd
-    // barcode, e.g. a multipack vs. single) — both ring up the same item.
-    const product = products.find((p) => {
-      if (!p.available) return false
-      return [p.upc, p.upc2].some((code) => {
-        const stored = (code ?? '').trim()
-        return stored && stripLeadingZeros(stored) === normalizedRaw
-      })
-    })
+    const product = findProduct(raw)
     if (product) {
       useKioskStore.getState().addToCart(product)
       useKioskStore.getState().closeScanMiss()
       showScanFeedback(`✓ Added: ${product.name}`, true)
       setScreen('cart')
+    } else if (looksLikeQrText(raw)) {
+      // The promo QR code on the package, not its barcode (lib/scanText.ts).
+      // Not a miss: no popup, no email. Just point at the barcode.
+      showScanFeedback(QR_HINT, false, true)
     } else {
       // "Not Scanning?" popup sends the shopper to Browse, and the miss is
       // logged for the dashboard's scan-miss email. A Browse pick right after
       // is logged too (ProductsScreen), naming the product with the bad UPC.
-      useKioskStore.getState().setScanMiss(raw)
-      logScanEvent(useKioskStore.getState().config.machineId, 'scan_miss', raw, { screen })
+      // Held back SPLIT_JOIN_MS: if the rest of a split barcode arrives, the
+      // join above cancels this and the item just rings up.
+      if (isDigits(raw)) scanFrag.current = { text: raw, at: now }
+      if (pendingMiss.current) clearTimeout(pendingMiss.current)
+      const missScreen = screen
+      pendingMiss.current = setTimeout(() => {
+        pendingMiss.current = null
+        useKioskStore.getState().setScanMiss(raw)
+        logScanEvent(useKioskStore.getState().config.machineId, 'scan_miss', raw, { screen: missScreen })
+      }, SPLIT_JOIN_MS)
     }
     resetIdleTimer()
   }, [showAdmin, showPinEntry, screen, showScanFeedback, setScreen, resetIdleTimer])
@@ -680,10 +710,10 @@ export default function KioskPage() {
         <div style={{
           position: 'absolute', bottom: 40, left: '50%', transform: 'translateX(-50%)',
           zIndex: 700, pointerEvents: 'none',
-          background: scanMsg.ok ? '#052e16' : '#450a0a',
-          border: `2px solid ${scanMsg.ok ? 'var(--green)' : 'var(--red)'}`,
-          color: scanMsg.ok ? '#86efac' : '#fca5a5',
-          fontSize: 18, fontWeight: 700, padding: '16px 32px', borderRadius: 14,
+          background: scanMsg.hint ? '#422006' : scanMsg.ok ? '#052e16' : '#450a0a',
+          border: `2px solid ${scanMsg.hint ? '#f59e0b' : scanMsg.ok ? 'var(--green)' : 'var(--red)'}`,
+          color: scanMsg.hint ? '#fde68a' : scanMsg.ok ? '#86efac' : '#fca5a5',
+          fontSize: scanMsg.hint ? 26 : 18, fontWeight: 700, padding: scanMsg.hint ? '22px 36px' : '16px 32px', borderRadius: 14,
           whiteSpace: 'nowrap', animation: 'fadeInUp 0.2s ease',
           boxShadow: '0 8px 32px rgba(0,0,0,0.6)',
         }}>
