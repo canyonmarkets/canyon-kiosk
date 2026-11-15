@@ -16,9 +16,25 @@ import ThankYouScreen  from './components/screens/ThankYouScreen'
 import TimeoutModal    from './components/TimeoutModal'
 import OfflineBanner   from './components/OfflineBanner'
 import AdminPanel      from './components/AdminPanel'
-import { SPLIT_JOIN_MS, isDigits, looksLikeQrText, QR_HINT } from './lib/scanText'
+import { SPLIT_JOIN_MS, STALL_WAIT_MS, PARTIAL_MISS_MS, QR_TAIL_MS, isCompleteBarcode, looksLikeQrText, QR_HINT } from './lib/scanText'
+import { barcodesMatch } from './lib/barcode'
 
 const CART_IDLE_SECONDS = 20  // 20 seconds — fast turnover for high-traffic sites
+
+// Match against EITHER barcode on the product (primary UPC or the optional 2nd
+// barcode, e.g. a multipack vs. single) — both ring up the same item.
+// barcodesMatch ignores leading zeros and treats a UPC-E and its UPC-A as equal
+// (lib/barcode.ts, from kiosk-core).
+function findScannedProduct(code: string) {
+  return useKioskStore.getState().products.find((p) =>
+    p.available && [p.upc, p.upc2].some((c) => barcodesMatch(c, code)))
+}
+
+// Whole enough to act on now instead of waiting for more keystrokes (lib/scanText.ts).
+function scanLooksWhole(buf: string) {
+  const s = buf.trim()
+  return !!s && (isCompleteBarcode(s) || !!findScannedProduct(s))
+}
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e))
 
@@ -151,10 +167,12 @@ export default function KioskPage() {
   const barcodeTimer   = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [scanMsg, setScanMsg] = useState<{ text: string; ok: boolean; hint?: boolean } | null>(null)
   const scanMsgTimer   = useRef<ReturnType<typeof setTimeout> | null>(null)
-  // Split reads (lib/scanText.ts): the last digits-only piece that didn't match,
-  // and its miss, held back SPLIT_JOIN_MS in case the rest of the barcode follows.
+  // Split reads (lib/scanText.ts): the last piece that wasn't a whole barcode,
+  // its miss (held back in case the rest follows), and until when stray pieces
+  // count as the tail of a QR code.
   const scanFrag       = useRef<{ text: string; at: number } | null>(null)
   const pendingMiss    = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const qrTailUntil    = useRef(0)
 
   // hint: amber and held longer, for "turn it around" (not an error).
   const showScanFeedback = useCallback((text: string, ok: boolean, hint = false) => {
@@ -176,27 +194,27 @@ export default function KioskPage() {
     if (!raw) return
     if (showAdmin || showPinEntry) return
     if (screen === 'payment' || screen === 'thankyou') return
-    const stripLeadingZeros = (s: string) => s.replace(/^0+/, '') || s
-    // Match against EITHER barcode on the product (primary UPC or the optional 2nd
-    // barcode, e.g. a multipack vs. single) — both ring up the same item.
-    const findProduct = (code: string) => {
-      const want = stripLeadingZeros(code)
-      return useKioskStore.getState().products.find((p) => p.available && [p.upc, p.upc2].some((c) => {
-        const stored = (c ?? '').trim()
-        return stored && stripLeadingZeros(stored) === want
-      }))
-    }
-    // Split read: this piece may be the rest of the one just before it.
+    const findProduct = findScannedProduct
+    // Split read: this piece may be the rest of the one just before it. Join
+    // when together they make a product, a whole barcode, or a QR link.
     const now = Date.now()
     const prev = scanFrag.current
     scanFrag.current = null
-    if (prev && now - prev.at < SPLIT_JOIN_MS && isDigits(prev.text) && isDigits(raw) && findProduct(prev.text + raw)) {
-      if (pendingMiss.current) { clearTimeout(pendingMiss.current); pendingMiss.current = null }
-      raw = prev.text + raw
+    if (prev && now - prev.at < SPLIT_JOIN_MS) {
+      const joined = prev.text + raw
+      if (findProduct(joined) || isCompleteBarcode(joined) || looksLikeQrText(joined)) {
+        if (pendingMiss.current) { clearTimeout(pendingMiss.current); pendingMiss.current = null }
+        raw = joined
+      }
+    }
+    // The rest of a QR code that came in pieces: ignore it quietly.
+    if (now < qrTailUntil.current && !findProduct(raw)) {
+      qrTailUntil.current = now + QR_TAIL_MS
+      return
     }
     if (raw.length < 4) {
       // Too short to be a barcode on its own; keep it in case the rest follows.
-      if (isDigits(raw)) scanFrag.current = { text: raw, at: now }
+      scanFrag.current = { text: raw, at: now }
       return
     }
     // Nothing scanned can be paid for, so don't put it in a cart. Telling the
@@ -221,23 +239,31 @@ export default function KioskPage() {
       // The promo QR code on the package, not its barcode (lib/scanText.ts).
       // Not a miss: no popup, no email. Just point at the barcode.
       showScanFeedback(QR_HINT, false, true)
+      qrTailUntil.current = now + QR_TAIL_MS
     } else {
       // "Not Scanning?" popup sends the shopper to Browse, and the miss is
       // logged for the dashboard's scan-miss email. A Browse pick right after
       // is logged too (ProductsScreen), naming the product with the bad UPC.
-      // Held back SPLIT_JOIN_MS: if the rest of a split barcode arrives, the
-      // join above cancels this and the item just rings up.
-      if (isDigits(raw)) scanFrag.current = { text: raw, at: now }
+      // A whole barcode that matches nothing is a real miss: say so now. A piece
+      // of one waits PARTIAL_MISS_MS: if the rest arrives, the join above
+      // cancels this and the item just rings up.
+      const whole = isCompleteBarcode(raw)
+      if (!whole) scanFrag.current = { text: raw, at: now }
       if (pendingMiss.current) clearTimeout(pendingMiss.current)
       const missScreen = screen
-      pendingMiss.current = setTimeout(() => {
+      const reportMiss = () => {
         pendingMiss.current = null
         useKioskStore.getState().setScanMiss(raw)
-        logScanEvent(useKioskStore.getState().config.machineId, 'scan_miss', raw, { screen: missScreen })
-      }, SPLIT_JOIN_MS)
+        logScanEvent(useKioskStore.getState().config.machineId, 'scan_miss', raw, { screen: missScreen, partial: !whole })
+      }
+      if (whole) { pendingMiss.current = null; reportMiss() }
+      else pendingMiss.current = setTimeout(reportMiss, PARTIAL_MISS_MS)
     }
     resetIdleTimer()
   }, [showAdmin, showPinEntry, screen, showScanFeedback, setScreen, resetIdleTimer])
+
+  const processBarcodeRef = useRef(processBarcode)
+  processBarcodeRef.current = processBarcode
 
   const handleScanKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
     if (e.key === 'Enter') {
@@ -250,14 +276,24 @@ export default function KioskPage() {
     }
     if (e.key.length === 1) {
       barcodeBuffer.current += e.key
-      // Fallback: process after 80ms of no new chars (scanners without Enter suffix)
-      if (barcodeTimer.current) clearTimeout(barcodeTimer.current)
-      barcodeTimer.current = setTimeout(() => {
-        processBarcode(barcodeBuffer.current)
-        barcodeBuffer.current = ''
-        barcodeTimer.current = null
-      }, 80)
+      armBarcodeTimer(80)
     }
+  }
+
+  // Fallback for scanners without an Enter suffix: process after 80ms of no new
+  // chars, but only if what arrived is already whole. A stalled scan (half a
+  // barcode, or a QR link mid-way) waits STALL_WAIT_MS of silence for the rest.
+  // (Through a ref: the wait can outlast a re-render, and the scan must be
+  // judged against the screen as it is when it finally lands.)
+  const armBarcodeTimer = (ms: number) => {
+    if (barcodeTimer.current) clearTimeout(barcodeTimer.current)
+    barcodeTimer.current = setTimeout(() => {
+      if (ms < STALL_WAIT_MS && !scanLooksWhole(barcodeBuffer.current)) { armBarcodeTimer(STALL_WAIT_MS); return }
+      const buf = barcodeBuffer.current
+      barcodeBuffer.current = ''
+      barcodeTimer.current = null
+      processBarcodeRef.current(buf)
+    }, ms)
   }
 
   // ── Crash recovery: reload on unhandled error ─────────────────────────────
